@@ -1,20 +1,29 @@
 <script>
+  import { onMount } from 'svelte';
   let clientId = '';
   let clientSecret = '';
   let saved = false;
   const KEY_ID = 'arrnba.clientId';
   const KEY_SECRET = 'arrnba.clientSecret';
   function load() {
-    clientId = localStorage.getItem(KEY_ID) ?? '';
-    clientSecret = localStorage.getItem(KEY_SECRET) ?? '';
+    try {
+      clientId = typeof localStorage !== 'undefined' ? (localStorage.getItem(KEY_ID) ?? '') : '';
+      clientSecret = typeof localStorage !== 'undefined' ? (localStorage.getItem(KEY_SECRET) ?? '') : '';
+    } catch {}
   }
   function save() {
-    localStorage.setItem(KEY_ID, clientId ?? '');
-    localStorage.setItem(KEY_SECRET, clientSecret ?? '');
-    saved = true;
-    setTimeout(()=> saved=false, 1500);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(KEY_ID, clientId ?? '');
+        localStorage.setItem(KEY_SECRET, clientSecret ?? '');
+      }
+      saved = true;
+      setTimeout(()=> saved=false, 1500);
+    } catch {}
   }
-  load();
+  onMount(() => {
+    load();
+  });
 </script>
 
 <div class="p-4">
