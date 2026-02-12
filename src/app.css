@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.accent {
+  color: theme('colors.accent.DEFAULT');
+}
+.accent-bg {
+  background-color: theme('colors.accent.DEFAULT');
+}
+
+.sticky-col {
+  position: sticky;
+  left: 0;
+  background-color: black;
+  z-index: 2;
+}

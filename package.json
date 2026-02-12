@@ -1,0 +1,22 @@
+{
+  "name": "arr-nba",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dev:host": "vite dev --host"
+  },
+  "dependencies": {
+    "@sveltejs/kit": "^2.50.2",
+    "@sveltejs/adapter-auto": "^3.2.0",
+    "svelte": "^5.0.0",
+    "tailwindcss": "^3.4.10",
+    "postcss": "^8.4.32",
+    "autoprefixer": "^10.4.19"
+  },
+  "devDependencies": {
+    "vite": "^6.3.0"
+  }
+}
