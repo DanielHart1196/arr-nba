@@ -1,4 +1,3 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "docs"
+  "buildCommand": "npm run build"
 }

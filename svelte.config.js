@@ -1,22 +1,10 @@
-import adapter from '@sveltejs/adapter-static';
-
-const isGhPages = process.env.GH_PAGES === 'true';
+import vercelAdapter from '@sveltejs/adapter-vercel';
 
 export default {
   kit: {
-    adapter: adapter({
-      pages: 'docs',
-      assets: 'docs',
-      fallback: '404.html'
-    }),
-    paths: {
-      base: isGhPages ? '/arr-nba' : ''
-    },
+    adapter: vercelAdapter(),
     alias: {
       $lib: 'src/lib'
-    },
-    prerender: {
-      entries: ['*']
     }
   }
 };
