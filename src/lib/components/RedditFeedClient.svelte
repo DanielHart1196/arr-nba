@@ -15,6 +15,7 @@
   let cacheComments = new Map();
   let watchTimer = null;
   let lastKey = '';
+  let triedFetch = { LIVE: false, POST: false };
 
   function mascot(n) {
     const s = (n || '').toLowerCase();
@@ -35,6 +36,53 @@
     const s = m === 'POST' ? 'top' : 'new';
     const key = `${pairKey()}|${s}|${m}`;
     return cacheThreads.get(key) || null;
+  }
+  async function fetchCommentsFor(t, sort) {
+    try {
+      const res = await fetch(`/api/reddit/comments/${t.id}?sort=${sort}&permalink=${encodeURIComponent(t.permalink || '')}`);
+      const json = await res.json();
+      cacheComments.set(`${t.id}|${sort}`, json?.comments ?? []);
+      const base = cacheComments.get(`${t.id}|${sort}`) || [];
+      comments = sortedCopy(base, sort);
+      loading = false;
+    } catch {
+      loading = false;
+    }
+  }
+  async function ensureThreadAndComments(m) {
+    const sort = m === 'POST' ? 'top' : 'new';
+    const t = threadForMode(m);
+    if (t && !cacheComments.has(`${t.id}|${sort}`)) {
+      loading = true;
+      await fetchCommentsFor(t, sort);
+      return;
+    }
+    if (!t && !triedFetch[m]) {
+      triedFetch[m] = true;
+      try {
+        const body = {
+          type: m === 'POST' ? 'post' : 'live',
+          awayCandidates: [awayName],
+          homeCandidates: [homeName]
+        };
+        const res = await fetch('/api/reddit/search', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        const found = json?.post;
+        if (found) {
+          const key = `${pairKey()}|${sort}|${m}`;
+          cacheThreads.set(key, found);
+          await fetchCommentsFor(found, sort);
+        } else {
+          loading = false;
+        }
+      } catch {
+        loading = false;
+      }
+    }
   }
 
   onMount(() => {
@@ -82,38 +130,10 @@
         loading = false;
         if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
       } else {
-        loading = true;
-        if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
-        watchTimer = setInterval(() => {
-          const tt = threadForMode(mode);
-          if (!tt) return;
-          const keyNow = `${tt.id}|${sortChoice === 'top' ? 'top' : 'new'}`;
-          if (cacheComments.has(keyNow)) {
-            thread = tt;
-            const baseNow = cacheComments.get(keyNow) || [];
-            comments = sortedCopy(baseNow, sortChoice);
-            loading = false;
-            clearInterval(watchTimer);
-            watchTimer = null;
-          }
-        }, 200);
+        ensureThreadAndComments(mode);
       }
     } else {
-      loading = true;
-      if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
-      watchTimer = setInterval(() => {
-        const tt = threadForMode(mode);
-        if (!tt) return;
-        const keyNow = `${tt.id}|${sortChoice === 'top' ? 'top' : 'new'}`;
-        if (cacheComments.has(keyNow)) {
-          thread = tt;
-          const baseNow = cacheComments.get(keyNow) || [];
-          comments = sortedCopy(baseNow, sortChoice);
-          loading = false;
-          clearInterval(watchTimer);
-          watchTimer = null;
-        }
-      }, 200);
+      ensureThreadAndComments(mode);
     }
   }
 
