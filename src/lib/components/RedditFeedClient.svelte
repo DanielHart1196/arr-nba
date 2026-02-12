@@ -1,21 +1,23 @@
 <script>
   import { onMount } from 'svelte';
+  import { nbaService } from '../services/nba.service';
+
   export let awayName;
   export let homeName;
   export let mode;
 
   let sortChoice = 'new';
-  let mapping = {};
-  let comments = [];
-  let thread;
   let loading = false;
-  let threadsByMode = { LIVE: null, POST: null };
-
-  let cacheThreads = new Map();
-  let cacheComments = new Map();
-  let watchTimer = null;
-  let lastKey = '';
   let triedFetch = { LIVE: false, POST: false };
+
+  // Local cache for switching between views instantly
+  let cache = {
+    LIVE: { thread: null, comments: [] },
+    POST: { thread: null, comments: [] }
+  };
+
+  $: thread = cache[mode]?.thread;
+  $: comments = cache[mode]?.comments;
 
   function mascot(n) {
     const s = (n || '').toLowerCase();
@@ -25,84 +27,84 @@
   function pairKey() {
     return [mascot(awayName), mascot(homeName)].sort().join('|');
   }
-  $: (() => {
+
+  async function fetchCommentsFor(t, sort, m) {
+    if (!t) return;
+    
+    // Check cache first to avoid showing "Loading..." if data is already there
+    const cached = await nbaService.getRedditComments(t.id, sort, t.permalink);
+    if (cached && cached.comments && cached.comments.length > 0) {
+      cache[m].comments = sortedCopy(cached.comments, sort === 'top' ? 'top' : 'new');
+      cache = { ...cache };
+    } else if (!cache[m].comments.length) {
+      loading = true;
+    }
+
     try {
-      const g = (window).__arrnba ||= { threads: new Map(), comments: new Map() };
-      cacheThreads = g.threads;
-      cacheComments = g.comments;
-    } catch {}
-  })();
-  function threadForMode(m) {
-    const s = m === 'POST' ? 'top' : 'new';
-    const key = `${pairKey()}|${s}|${m}`;
-    return cacheThreads.get(key) || null;
-  }
-  async function fetchCommentsFor(t, sort) {
-    try {
-      const res = await fetch(`/api/reddit/comments/${t.id}?sort=${sort}&permalink=${encodeURIComponent(t.permalink || '')}`);
-      const json = await res.json();
-      cacheComments.set(`${t.id}|${sort}`, json?.comments ?? []);
-      const base = cacheComments.get(`${t.id}|${sort}`) || [];
-      comments = sortedCopy(base, sort);
-      loading = false;
-    } catch {
-      loading = false;
+      const res = await nbaService.getRedditComments(t.id, sort, t.permalink);
+      if (mode === m) {
+        cache[m].comments = sortedCopy(res.comments ?? [], sort === 'top' ? 'top' : 'new');
+        cache = { ...cache };
+      }
+    } catch (err) {
+      console.error('Failed to fetch comments:', err);
+    } finally {
+      if (mode === m) loading = false;
     }
   }
   async function ensureThreadAndComments(m) {
     const sort = m === 'POST' ? 'top' : 'new';
-    const t = threadForMode(m);
-    if (t && !cacheComments.has(`${t.id}|${sort}`)) {
-      loading = true;
-      await fetchCommentsFor(t, sort);
-      return;
-    }
-    if (!t && !triedFetch[m]) {
-      triedFetch[m] = true;
-      try {
-        const body = {
+    
+    try {
+      // 1. Try to get from index first
+      const mapping = await nbaService.getRedditIndex();
+      const entry = mapping[pairKey()];
+      let t = m === 'POST' ? entry?.pgt : entry?.gdt;
+
+      if (t) {
+        cache[m].thread = t;
+        cache = { ...cache };
+        await fetchCommentsFor(t, sort, m);
+        return;
+      }
+
+      // 2. If not in index, search for it
+      if (!triedFetch[m]) {
+        triedFetch[m] = true;
+        // Check if we should show loading for search
+        if (!cache[m].thread) loading = true;
+        
+        const res = await nbaService.searchRedditThread({
           type: m === 'POST' ? 'post' : 'live',
           awayCandidates: [awayName],
           homeCandidates: [homeName]
-        };
-        const res = await fetch('/api/reddit/search', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body)
         });
-        const json = await res.json();
-        const found = json?.post;
+        const found = res?.post;
         if (found) {
-          const key = `${pairKey()}|${sort}|${m}`;
-          cacheThreads.set(key, found);
-          await fetchCommentsFor(found, sort);
+          cache[m].thread = found;
+          cache = { ...cache };
+          await fetchCommentsFor(found, sort, m);
         } else {
+          if (mode === m) {
+            cache[m].thread = null;
+            cache[m].comments = [];
+            cache = { ...cache };
+            loading = false;
+          }
+        }
+      } else {
+        // If we already tried fetching and found nothing, ensure UI reflects that
+        if (mode === m && !cache[m].thread) {
+          cache[m].comments = [];
+          cache = { ...cache };
           loading = false;
         }
-      } catch {
-        loading = false;
       }
+    } catch (err) {
+      console.error(`Error ensuring ${m} thread:`, err);
+      if (mode === m) loading = false;
     }
   }
-
-  onMount(() => {
-    const lt = threadForMode('LIVE');
-    const pt = threadForMode('POST');
-    const msort = mode === 'POST' ? 'top' : 'new';
-    sortChoice = msort;
-    if (mode === 'LIVE' && lt) {
-      thread = lt;
-      const ckey = `${thread.id}|${msort}`;
-      const base = cacheComments.get(ckey) || [];
-      comments = sortedCopy(base, sortChoice);
-    } else if (mode === 'POST' && pt) {
-      thread = pt;
-      const ckey = `${thread.id}|${msort}`;
-      const base = cacheComments.get(ckey) || [];
-      comments = sortedCopy(base, sortChoice);
-    }
-    loading = false;
-  });
 
   function ago(ts) {
     const now = Math.floor(Date.now() / 1000);
@@ -117,52 +119,31 @@
   }
 
   $: if (mode === 'LIVE' || mode === 'POST') {
-    const t = threadForMode(mode);
     const msort = mode === 'POST' ? 'top' : 'new';
     sortChoice = msort;
-    if (t) {
-      thread = t;
-      const ckey = `${thread.id}|${msort}`;
-      lastKey = ckey;
-      if (cacheComments.has(ckey)) {
-        const base = cacheComments.get(ckey) || [];
-        comments = sortedCopy(base, sortChoice);
-        loading = false;
-        if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
-      } else {
-        ensureThreadAndComments(mode);
-      }
-    } else {
-      ensureThreadAndComments(mode);
-    }
+    // We do NOT clear cache[mode] here, just trigger fetch to update it if needed.
+    ensureThreadAndComments(mode);
+  } else {
+    loading = false;
   }
 
   function toggleTop(i) {
-    const c = comments?.[i];
+    const c = cache[mode].comments?.[i];
     if (!c) return;
     c._collapsed = !c._collapsed;
-    comments = [...comments];
+    cache = { ...cache };
   }
   function toggleReply(i, j) {
-    const r = comments?.[i]?.replies?.[j];
+    const r = cache[mode].comments?.[i]?.replies?.[j];
     if (!r) return;
     r._collapsed = !r._collapsed;
-    comments = [...comments];
+    cache = { ...cache };
   }
   function toggleSub(i, j, k) {
-    const rr = comments?.[i]?.replies?.[j]?.replies?.[k];
+    const rr = cache[mode].comments?.[i]?.replies?.[j]?.replies?.[k];
     if (!rr) return;
     rr._collapsed = !rr._collapsed;
-    comments = [...comments];
-  }
-  function topKey(c, i) {
-    return c?.id || `c_${i}`;
-  }
-  function replyKey(r, i, j) {
-    return r?.id || `c_${i}_r_${j}`;
-  }
-  function subReplyKey(rr, i, j, k) {
-    return rr?.id || `c_${i}_r_${j}_rr_${k}`;
+    cache = { ...cache };
   }
   function sortedCopy(base, choice) {
     const cmp = (a, b) => {
@@ -180,22 +161,43 @@
     return cloneAndSort(base || []);
   }
   function reorder() {
-    comments = sortedCopy(comments, sortChoice);
+    cache[mode].comments = sortedCopy(cache[mode].comments, sortChoice);
+    cache = { ...cache };
+  }
+  
+  async function refreshComments() {
+    const t = cache[mode].thread;
+    if (!t) return;
+    loading = true;
+    try {
+      const sort = mode === 'POST' ? 'top' : 'new';
+      const res = await nbaService.getRedditComments(t.id, sort, t.permalink, true);
+      cache[mode].comments = sortedCopy(res.comments ?? [], sortChoice);
+      cache = { ...cache };
+      loading = false;
+    } catch (error) {
+      console.error('Failed to refresh comments:', error);
+      loading = false;
+    }
   }
 </script>
 
 <div>
   <div class="flex items-center justify-between mb-3">
-    <div class="flex items-center gap-2">
-      <button class="px-3 py-1 rounded bg-white/10" on:click={() => { sortChoice = 'new'; reorder(); }}>New</button>
-      <button class="px-3 py-1 rounded bg-white/10" on:click={() => { sortChoice = 'top'; reorder(); }}>Top</button>
+    <div class="flex items-center gap-2 text-xs font-semibold">
+      <button class="px-3 py-1 rounded {sortChoice === 'new' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => { sortChoice = 'new'; reorder(); }}>NEW</button>
+      <button class="px-3 py-1 rounded {sortChoice === 'top' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => { sortChoice = 'top'; reorder(); }}>TOP</button>
+      <button class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white" on:click={refreshComments}>REFRESH</button>
     </div>
     {#if thread}
       <a class="text-white/70 hover:text-white underline" href={thread.url || (thread.permalink ? `https://www.reddit.com${thread.permalink}` : `https://www.reddit.com/comments/${thread.id}`)} target="_blank" rel="noopener noreferrer">Open Thread</a>
     {/if}
   </div>
   {#if loading}
-    <div class="text-white/70">Loading comments...</div>
+    <div class="text-white/70 flex items-center gap-2">
+      <div class="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></div>
+      Loading comments...
+    </div>
   {:else if !thread}
     <div class="text-white/70">No comments yet.</div>
   {:else}

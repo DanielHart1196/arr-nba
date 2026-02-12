@@ -1,0 +1,72 @@
+import { expandTeamNames } from '../../../../../lib/utils/team-matching.utils';
+
+export const POST = async ({ request }: any) => {
+  try {
+    const body = await request.json();
+    const { awayTeam, homeTeam } = body;
+    
+    if (!awayTeam || !homeTeam) {
+      return new Response(JSON.stringify({ error: 'Missing team names' }), { status: 400 });
+    }
+    
+    // Search for post-game thread as fallback
+    const expandedAway = expandTeamNames([awayTeam]);
+    const expandedHome = expandTeamNames([homeTeam]);
+    const allTeamNames = [...expandedAway, ...expandedHome];
+    
+    const terms = allTeamNames.map(t => `"${t}"`).join(' OR ');
+    const query = `"POST GAME THREAD" (${terms}) -"GAME THREAD"`;
+    
+    console.log(`Fallback search query: ${query}`);
+    
+    const res = await fetch(`https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=week`);
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: 'Search failed' }), { status: 500 });
+    }
+    
+    const json = await res.json();
+    const items = json?.data?.children ?? [];
+    const now = Date.now() / 1000;
+    
+    // Filter for recent threads (last 48 hours) and correct thread type
+    const fresh = items.filter((i: any) => {
+      const created = i?.data?.created_utc ?? 0;
+      const title = (i?.data?.title || '').toLowerCase();
+      const isRecent = (now - created) <= (48 * 3600);
+      
+      return isRecent && (
+        title.includes('post game thread') || 
+        title.includes('post-game thread') ||
+        title.includes('postgame thread')
+      );
+    });
+    
+    if (fresh.length === 0) {
+      return new Response(JSON.stringify({ error: 'No post-game thread found' }), { status: 404 });
+    }
+    
+    // Sort by score (highest first)
+    fresh.sort((a: any, b: any) => (b?.data?.score ?? 0) - (a?.data?.score ?? 0));
+    
+    const bestMatch = fresh[0];
+    const result = {
+      id: bestMatch?.data?.id,
+      title: bestMatch?.data?.title,
+      permalink: bestMatch?.data?.permalink,
+      url: `https://www.reddit.com${bestMatch?.data?.permalink}`,
+      created_utc: bestMatch?.data?.created_utc,
+      score: bestMatch?.data?.score
+    };
+    
+    console.log(`Fallback found PGT: ${result.title}`);
+    
+    return new Response(JSON.stringify({ post: result }), { 
+      status: 200, 
+      headers: { 'content-type': 'application/json' } 
+    });
+    
+  } catch (error) {
+    console.error('Fallback search error:', error);
+    return new Response(JSON.stringify({ error: 'Fallback search failed' }), { status: 500 });
+  }
+};

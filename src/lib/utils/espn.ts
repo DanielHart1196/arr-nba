@@ -12,6 +12,19 @@ export function parseMakesAttempts(input: string) {
   return { attempts, makes, pct };
 }
 
+function minutesToSeconds(v: any): number {
+  if (typeof v === 'string') {
+    const upper = v.toUpperCase();
+    if (upper === 'DNP') return 0;
+    const m = /^(\d+):(\d+)$/.exec(v);
+    if (m) return (parseInt(m[1]) * 60) + parseInt(m[2]);
+    const n = Number(v);
+    return isNaN(n) ? 0 : n;
+  }
+  const n = Number(v);
+  return isNaN(n) ? 0 : n;
+}
+
 export function normalizePlayers(summary: any, scoreboardEvent?: any) {
   const players: Record<'home' | 'away', PlayerStatRow[]> = { home: [], away: [] };
   const competitions = summary?.boxscore?.players ?? [];
@@ -24,10 +37,27 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
     const hv = c?.homeAway === 'home' ? 'home' : 'away';
     if (tid) idToSide.set(tid, hv);
   }
-  for (const team of competitions) {
+  const finalPlayers: Record<'home' | 'away', PlayerStatRow[]> = { home: [], away: [] };
+  
+  competitions.forEach((team: any, index: number) => {
     const teamId = String(team?.team?.id ?? '');
-    const mapped = (teamId && idToSide.get(teamId)) || (team?.team?.homeAway === 'home' ? 'home' : 'away');
-    const side: 'home' | 'away' = mapped === 'home' ? 'home' : 'away';
+    const teamDisplayName = team?.team?.displayName ?? 'Unknown';
+    let side: 'home' | 'away';
+    if (idToSide.has(teamId)) {
+      side = idToSide.get(teamId)!;
+    } else if (team?.team?.homeAway) {
+      side = team.team.homeAway === 'home' ? 'home' : 'away';
+    } else {
+      // Fallback if no side information is found
+      side = index === 0 ? 'away' : 'home';
+    }
+    
+    // Safety check to ensure we don't overwrite if both teams somehow map to the same side
+    let targetSide: 'home' | 'away' = side;
+    if (finalPlayers[targetSide].length > 0) {
+      targetSide = targetSide === 'home' ? 'away' : 'home';
+    }
+
     const statNames: string[] = team?.statistics?.[0]?.names ?? [];
     const teamPlayers = team?.statistics?.[0]?.athletes ?? [];
     const rows: PlayerStatRow[] = [];
@@ -40,9 +70,10 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
         const val = statsArr[i];
         if (key === 'FG' || key === '3PT' || key === 'FT') {
           const res = parseMakesAttempts(typeof val === 'string' ? val : String(val ?? '0-0'));
-          statObj[`${key}A`] = res.attempts;
-          statObj[`${key}M`] = res.makes;
-          statObj[`${key}%`] = res.pct;
+          const displayKey = key === '3PT' ? '3P' : key;
+          statObj[`${displayKey}A`] = res.attempts;
+          statObj[`${displayKey}M`] = res.makes;
+          statObj[`${displayKey}%`] = res.pct;
         } else if (key === 'MIN') {
           statObj['MIN'] = typeof val === 'string' ? val : String(val ?? '');
         } else if (key === '+/-') {
@@ -55,33 +86,31 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
       const dnpFlag = p?.didNotPlay === true || (typeof minVal === 'string' && minVal.toUpperCase() === 'DNP');
       rows.push({ name: displayName, dnp: dnpFlag, stats: statObj });
     }
-    function minutesToSeconds(v: any): number {
-      if (typeof v === 'string') {
-        const upper = v.toUpperCase();
-        if (upper === 'DNP') return 0;
-        const m = /^(\d+):(\d+)$/.exec(v);
-        if (m) return (parseInt(m[1]) * 60) + parseInt(m[2]);
-        const n = Number(v);
-        return isNaN(n) ? 0 : n;
-      }
-      const n = Number(v);
-      return isNaN(n) ? 0 : n;
-    }
-    function rank(r: PlayerStatRow): number {
-      const mins = minutesToSeconds(r?.stats?.['MIN']);
-      return (r.dnp || mins <= 0) ? 1 : 0;
-    }
-    rows.sort((a, b) => rank(a) - rank(b));
-    players[side] = rows;
-  }
-  return { players, names: nameOrder };
+    
+    rows.sort((a, b) => {
+      const minsA = minutesToSeconds(a?.stats?.['MIN']);
+      const minsB = minutesToSeconds(b?.stats?.['MIN']);
+      const rankA = (a.dnp || minsA <= 0) ? 1 : 0;
+      const rankB = (b.dnp || minsB <= 0) ? 1 : 0;
+      return rankA - rankB;
+    });
+    
+    finalPlayers[targetSide] = rows;
+  });
+  return { players: finalPlayers, names: nameOrder };
 }
 
 export function parseLinescores(summary: any, scoreboardFallback?: any) {
   const comp = summary?.boxscore?.teams ?? [];
   const lines: Record<'home' | 'away', { team: any; periods: number[]; total: number }> = { home: { team: {}, periods: [], total: 0 }, away: { team: {}, periods: [], total: 0 } };
   for (const t of comp) {
-    const side: 'home' | 'away' = t?.team?.homeAway === 'home' ? 'home' : 'away';
+    let side: 'home' | 'away' = t?.team?.homeAway === 'home' ? 'home' : 'away';
+    
+    // Check if this side is already taken (to prevent both teams mapping to 'away')
+    if (lines[side].total !== 0 || Object.keys(lines[side].team).length !== 0) {
+      side = side === 'home' ? 'away' : 'home';
+    }
+
     const ls = t?.linescores ?? [];
     const periods: number[] = ls.map((p: any) => Number(p?.value ?? 0));
     const total = Number(t?.score ?? 0);

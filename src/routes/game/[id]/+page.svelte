@@ -2,68 +2,69 @@
   import { onMount, onDestroy } from 'svelte';
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
+  import { nbaService } from '../../../lib/services/nba.service';
+  import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
+  import type { BoxscoreResponse } from '../../../lib/types/nba';
+  
   export let data: any;
-  let payload = data;
+  let payload: BoxscoreResponse | any = null;
   let interval: any;
+  let redditInterval: any;
+  
   async function refresh() {
     try {
-      const res = await fetch(`/api/boxscore/${payload.id}`);
-      const json = await res.json();
-      payload = { id: payload.id, ...json };
-    } catch {}
+      const response = await nbaService.getBoxscore(data.id);
+      payload = { ...response };
+    } catch (error) {
+      console.error('Failed to refresh boxscore:', error);
+    }
   }
-  onMount(() => {
-    interval = setInterval(refresh, 15000);
+
+  // Handle streamed data
+  $: if (data.streamed?.payload) {
+    data.streamed.payload.then((res: any) => {
+      if (!payload) payload = res;
+    }).catch((err: any) => {
+      console.error('Failed to load streamed payload:', err);
+    });
+  }
+  
+  async function refreshRedditData() {
     const awayName = payload?.linescores?.away?.team?.displayName;
     const homeName = payload?.linescores?.home?.team?.displayName;
-    function mascot(n) {
-      const s = (n || '').toLowerCase();
-      if (s.includes('trail blazers')) return 'Trail Blazers';
-      return n;
+    
+    if (!awayName || !homeName) return;
+    
+    const pairKey = [normalizeMascot(awayName), normalizeMascot(homeName)].sort().join('|');
+    
+    try {
+      // Refresh live comments more aggressively
+      const mapping = await nbaService.getRedditIndex();
+      const liveThread = mapping?.[pairKey]?.gdt;
+
+      if (liveThread) {
+        await nbaService.getRedditComments(liveThread.id, 'new', liveThread.permalink, true);
+      }
+    } catch (error) {
+      console.error('Failed to refresh Reddit data:', error);
     }
-    const pairKey = [mascot(awayName), mascot(homeName)].sort().join('|');
-    const globalCache = ((window as any).__arrnba ||= { threads: new Map(), comments: new Map() });
-    (async () => {
-      try {
-        const idxRes = await fetch('/api/reddit/index');
-        const idxJson = await idxRes.json();
-        const entry = idxJson?.mapping?.[pairKey];
-        let liveThread = entry?.gdt;
-        let postThread = entry?.pgt;
-        if (!liveThread || !postThread) {
-          const resLive = await fetch('/api/reddit/search', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ type: 'live', awayCandidates: [awayName], homeCandidates: [homeName] })
-          });
-          const jsonLive = await resLive.json();
-          if (jsonLive?.post) liveThread = jsonLive.post;
-          const resPost = await fetch('/api/reddit/search', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ type: 'post', awayCandidates: [awayName], homeCandidates: [homeName] })
-          });
-          const jsonPost = await resPost.json();
-          if (jsonPost?.post) postThread = jsonPost.post;
-        }
-        if (liveThread) globalCache.threads.set(`${pairKey}|new|LIVE`, liveThread);
-        if (postThread) globalCache.threads.set(`${pairKey}|top|POST`, postThread);
-        if (liveThread) {
-          const res = await fetch(`/api/reddit/comments/${liveThread.id}?sort=new&permalink=${encodeURIComponent(liveThread.permalink || '')}`);
-          const json = await res.json();
-          globalCache.comments.set(`${liveThread.id}|new`, json?.comments ?? []);
-        }
-        if (postThread) {
-          const res = await fetch(`/api/reddit/comments/${postThread.id}?sort=top&permalink=${encodeURIComponent(postThread.permalink || '')}`);
-          const json = await res.json();
-          globalCache.comments.set(`${postThread.id}|top`, json?.comments ?? []);
-        }
-      } catch {}
-    })();
+  }
+  onMount(() => {
+    // If payload is still null, try refreshing immediately on client
+    if (!payload) {
+      refresh();
+    }
+    interval = setInterval(refresh, 15000);
+    
+    // Continue with periodic refresh
+    redditInterval = setInterval(refreshRedditData, 30000); // Refresh Reddit every 30 seconds
   });
   onDestroy(() => {
     if (interval) clearInterval(interval);
+    if (redditInterval) clearInterval(redditInterval);
   });
+  
+  
   function formatStatus(s: string) {
     const str = (s || '').trim();
     if (!str) return '';
@@ -75,82 +76,60 @@
     }
     return str.toUpperCase();
   }
-  function logoAb(team: any): string {
-    const raw = (team?.abbreviation || '').toUpperCase();
-    const map: Record<string, string> = {
-      SA: 'SAS',
-      NO: 'NOP',
-      GS: 'GSW',
-      NY: 'NYK',
-      PHO: 'PHX',
-      WSH: 'WAS',
-      UTAH: 'UTA'
-    };
-    const name = (team?.shortDisplayName || team?.displayName || '').toUpperCase();
-    const nameMap: Record<string, string> = {
-      'UTAH': 'UTA',
-      'LOS ANGELES CLIPPERS': 'LAC',
-      'LA CLIPPERS': 'LAC',
-      'LOS ANGELES LAKERS': 'LAL',
-      'LA LAKERS': 'LAL',
-      'GOLDEN STATE': 'GSW',
-      'NEW ORLEANS': 'NOP',
-      'SAN ANTONIO': 'SAS',
-      'NEW YORK': 'NYK',
-      'PHOENIX': 'PHX',
-      'WASHINGTON': 'WAS'
-    };
-    const ab = map[raw] || raw;
-    if (!nameMap[name] && name.includes('UTAH')) return 'UTA';
-    return nameMap[name] || ab || '';
+  function normalizeMascot(name: string): string {
+    const s = (name || '').toLowerCase();
+    if (s.includes('trail blazers')) return 'Trail Blazers';
+    return name;
   }
 </script>
 
 <div class="p-4">
   <button class="text-white/70 hover:text-white" on:click={() => history.back()}>← Back</button>
-  <div class="mt-2 mb-4">
-    {#if !payload?.error}
-      {#if payload?.linescores}
-        <div class="flex items-center justify-between text-lg font-semibold">
-          <div class="flex items-center gap-2">
-            <img
-              src={`/logos/${logoAb(payload?.linescores?.away?.team)}.svg`}
-              alt="away"
-              width="28" height="28" loading="eager" decoding="async"
-              on:error={(e)=>{(e.currentTarget as HTMLElement).style.display='none';}}
-            />
-            <span>{logoAb(payload?.linescores?.away?.team)}</span>
-          </div>
-          <span>{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
-          <div class="flex items-center gap-2">
-            <span>{logoAb(payload?.linescores?.home?.team)}</span>
-            <img
-              src={`/logos/${logoAb(payload?.linescores?.home?.team)}.svg`}
-              alt="home"
-              width="28" height="28" loading="eager" decoding="async"
-              on:error={(e)=>{(e.currentTarget as HTMLElement).style.display='none';}}
-            />
-          </div>
+  <div class="mt-2 mb-2 min-h-[60px] swipe-area">
+    {#if payload?.linescores}
+      <div class="flex items-center justify-between text-lg font-semibold">
+        <div class="flex items-center gap-2">
+          <img
+            src={`/logos/${getTeamLogoAbbr(payload?.linescores?.away?.team)}.svg`}
+            alt="away"
+            width="28" height="28" loading="eager" decoding="async"
+            on:error={(e)=>{(e.currentTarget).style.display='none';}}
+          />
+          <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
         </div>
-        <div class="text-center text-white/70 text-sm mt-1">
-          {#if payload?.status?.name && payload?.status?.name?.toUpperCase()?.includes('FINAL')}
-            FINAL
-          {:else if payload?.status?.short}
-            {formatStatus(payload?.status?.short)}
-          {:else}
-            {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
-          {/if}
+        <span>{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
+        <div class="flex items-center gap-2">
+          <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
+          <img
+            src={`/logos/${getTeamLogoAbbr(payload?.linescores?.home?.team)}.svg`}
+            alt="home"
+            width="28" height="28" loading="eager" decoding="async"
+            on:error={(e)=>{(e.currentTarget).style.display='none';}}
+          />
         </div>
-      {/if}
+      </div>
+      <div class="text-center text-white/70 text-sm mt-1">
+        {#if payload?.status?.name && payload?.status?.name?.toUpperCase()?.includes('FINAL')}
+          FINAL
+        {:else if payload?.status?.short}
+          {formatStatus(payload?.status?.short)}
+        {:else}
+          {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
+        {/if}
+      </div>
     {/if}
   </div>
-  {#if payload?.error}
+  {#if payload?.error && !payload?.linescores}
     <div class="text-red-400">{payload.error}</div>
-  {:else}
+  {:else if payload?.linescores}
     <BoxScoreToggle eventId={payload.id} players={payload.players} linescores={payload.linescores}>
       <div slot="reddit" let:mode let:side>
         <RedditFeedClient awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} {mode} />
       </div>
     </BoxScoreToggle>
+  {:else}
+    <div class="flex items-center justify-center py-8">
+      <div class="animate-spin w-8 h-8 border-4 border-white/10 border-t-white/70 rounded-full"></div>
+    </div>
   {/if}
 </div>

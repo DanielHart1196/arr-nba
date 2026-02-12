@@ -1,5 +1,10 @@
-export const load = async ({ fetch, params }: any) => {
-  const res = await fetch(`/api/boxscore/${params.id}`);
-  const json = await res.json();
-  return { id: params.id, ...json };
+import { nbaService } from '$lib/services/nba.service';
+
+export const load = async ({ params }: any) => {
+  return { 
+    id: params.id,
+    streamed: {
+      payload: nbaService.getBoxscore(params.id)
+    }
+  };
 };
