@@ -1,6 +1,5 @@
 <script>
   import { onMount } from 'svelte';
-  export let eventId;
   export let awayName;
   export let homeName;
   export let mode;
@@ -27,7 +26,7 @@
   }
   $: (() => {
     try {
-      const g = (window.__arrnba ||= { threads: new Map(), comments: new Map() });
+      const g = (window).__arrnba ||= { threads: new Map(), comments: new Map() };
       cacheThreads = g.threads;
       cacheComments = g.comments;
     } catch {}
@@ -182,7 +181,7 @@
   {:else}
     <div class="space-y-3">
       {#each comments as c, i (c.id || i)}
-        <div role="button" tabindex="0" class="w-full text-left border border-white/10 rounded p-2 cursor-pointer" on:click={() => toggleTop(i)}>
+        <div role="button" tabindex="0" class="w-full text-left border border-white/10 rounded p-2 cursor-pointer" on:click={() => toggleTop(i)} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleTop(i); }}>
           <div class="text-sm text-white/70">
             {c.author} • {c.score} • {ago(c.created_utc)} {c._collapsed ? '• collapsed' : ''}
           </div>
@@ -191,7 +190,7 @@
             {#if c.replies && c.replies.length}
               <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
                 {#each c.replies as r, j (r.id || j)}
-                  <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleReply(i, j); }}>
+                  <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleReply(i, j); }} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleReply(i, j); } }}>
                     <div class="text-sm text-white/70">
                       {r.author} • {r.score} • {ago(r.created_utc)} {r._collapsed ? '• collapsed' : ''}
                     </div>
@@ -200,7 +199,7 @@
                       {#if r.replies && r.replies.length}
                         <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
                           {#each r.replies as rr, k (rr.id || k)}
-                            <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleSub(i, j, k); }}>
+                            <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleSub(i, j, k); }} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleSub(i, j, k); } }}>
                               <div class="text-sm text-white/70">
                                 {rr.author} • {rr.score} • {ago(rr.created_utc)} {rr._collapsed ? '• collapsed' : ''}
                               </div>

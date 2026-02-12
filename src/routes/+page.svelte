@@ -94,7 +94,7 @@
   {:else}
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
       {#each events as e}
-        <a href={`/game/${e.id}`} sveltekit:prefetch class="block border border-white/10 rounded p-3 hover:border-white/20">
+        <a href={`/game/${e.id}`} data-sveltekit-preload-data class="block border border-white/10 rounded p-3 hover:border-white/20">
           <div class="grid grid-cols-5 grid-rows-2 gap-x-3 items-center">
             <div class="row-span-2 justify-self-center">
               <img

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import BoxScoreToggle from '$lib/components/BoxScoreToggle.svelte';
-  import RedditFeedClient from '$lib/components/RedditFeedClient.svelte';
+  import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
+  import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   export let data: any;
   let payload = data;
   let interval: any;
@@ -22,7 +22,7 @@
       return n;
     }
     const pairKey = [mascot(awayName), mascot(homeName)].sort().join('|');
-    const globalCache = (window.__arrnba ||= { threads: new Map(), comments: new Map() });
+    const globalCache = ((window as any).__arrnba ||= { threads: new Map(), comments: new Map() });
     (async () => {
       try {
         const idxRes = await fetch('/api/reddit/index');
@@ -147,10 +147,9 @@
   {#if payload?.error}
     <div class="text-red-400">{payload.error}</div>
   {:else}
-    <BoxScoreToggle eventId={payload.id} names={payload.names} players={payload.players} linescores={payload.linescores}>
+    <BoxScoreToggle eventId={payload.id} players={payload.players} linescores={payload.linescores}>
       <div slot="reddit" let:mode let:side>
-        <RedditFeedClient eventId={payload.id}
-          awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} {mode} />
+        <RedditFeedClient awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} {mode} />
       </div>
     </BoxScoreToggle>
   {/if}

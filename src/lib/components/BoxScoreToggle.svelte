@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   export let eventId: string;
-  export let names: string[] = [];
   export let players: { home: any[]; away: any[] };
   export let linescores: { home: any; away: any };
 
@@ -120,7 +119,7 @@
   }
 </script>
 
-<div on:touchstart={ts} on:touchend={te}>
+<div on:touchstart={ts} on:touchend={te} role="region">
 <div class="grid grid-cols-3 gap-2 mb-3">
   <div class="text-center">
     <button class="w-full py-2 font-semibold {mode==='LIVE' ? 'text-white' : 'text-white/70'}" on:click={() => setMode('LIVE')}>LIVE</button>
