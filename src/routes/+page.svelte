@@ -56,6 +56,19 @@
     const status = comp?.status?.type?.description ?? '';
     return status;
   }
+  let hideScores = false;
+  function toggleHide() {
+    hideScores = !hideScores;
+    try {
+      localStorage.setItem('arrnba.hideScores', hideScores ? '1' : '0');
+    } catch {}
+  }
+  onMount(() => {
+    try {
+      const v = localStorage.getItem('arrnba.hideScores');
+      hideScores = v === '1';
+    } catch {}
+  });
   function logoAb(team: any): string {
     const raw = (team?.abbreviation || '').toUpperCase();
     const map: Record<string, string> = {
@@ -88,7 +101,13 @@
 </script>
 
 <div class="p-4">
-  <h1 class="text-2xl font-semibold mb-4">ARR NBA</h1>
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-2xl font-semibold">ARR NBA</h1>
+    <button class="px-3 py-1 rounded border border-white/10 bg-white/10 text-white/90"
+      on:click={toggleHide}>
+      {hideScores ? 'Show Scores' : 'Hide Scores'}
+    </button>
+  </div>
   {#if !events || events.length === 0}
     <div class="text-white/70">No games found…</div>
   {:else}
@@ -120,13 +139,13 @@
               />
             </div>
             <div class="text-right">
-              {e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.score}
+              {hideScores ? '-' : e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.score}
             </div>
             <div class="text-center text-white/70">
               {e?.competitions?.[0]?.status?.type?.shortDetail}
             </div>
             <div class="text-left">
-              {e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.score}
+              {hideScores ? '-' : e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.score}
             </div>
           </div>
         </a>

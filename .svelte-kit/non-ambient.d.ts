@@ -50,6 +50,6 @@ declare module "$app/types" {
 		};
 		Pathname(): "/" | "/api" | "/api/" | "/api/boxscore" | "/api/boxscore/" | `/api/boxscore/${string}` & {} | `/api/boxscore/${string}/` & {} | "/api/reddit" | "/api/reddit/" | "/api/reddit/comments" | "/api/reddit/comments/" | `/api/reddit/comments/${string}` & {} | `/api/reddit/comments/${string}/` & {} | "/api/reddit/index" | "/api/reddit/index/" | "/api/reddit/search" | "/api/reddit/search/" | "/api/scoreboard" | "/api/scoreboard/" | "/game" | "/game/" | `/game/${string}` & {} | `/game/${string}/` & {} | "/settings" | "/settings/";
 		ResolvedPathname(): `${"" | `/${string}`}${ReturnType<AppTypes['Pathname']>}`;
-		Asset(): string & {};
+		Asset(): "/logos/ATL.svg" | "/logos/BKN.svg" | "/logos/BOS.svg" | "/logos/CHA.svg" | "/logos/CHI.svg" | "/logos/CLE.svg" | "/logos/DAL.svg" | "/logos/DEN.svg" | "/logos/DET.svg" | "/logos/GSW.svg" | "/logos/HOU.svg" | "/logos/IND.svg" | "/logos/LAC.svg" | "/logos/LAL.svg" | "/logos/MEM.svg" | "/logos/MIA.svg" | "/logos/MIL.svg" | "/logos/MIN.svg" | "/logos/NOP.svg" | "/logos/NYK.svg" | "/logos/OKC.svg" | "/logos/ORL.svg" | "/logos/PHI.svg" | "/logos/PHX.svg" | "/logos/POR.svg" | "/logos/SAC.svg" | "/logos/SAS.svg" | "/logos/TOR.svg" | "/logos/UTA.svg" | "/logos/WAS.svg" | string & {};
 	}
 }
