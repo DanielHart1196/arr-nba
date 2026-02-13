@@ -1,7 +1,7 @@
 import type { ICache } from '../cache/cache.interface';
 import { expandTeamNames } from '../utils/team-matching.utils';
 import { createPairKey } from '../utils/reddit.utils';
-import { env as publicEnv } from '$env/dynamic/public';
+import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import type { 
   RedditThreadMapping,
   RedditSearchRequest,
@@ -38,12 +38,17 @@ export class RedditService {
     if (typeof window === 'undefined') return;
 
     try {
-      const url = publicEnv.PUBLIC_SUPABASE_URL;
-      const key = publicEnv.PUBLIC_SUPABASE_ANON_KEY;
+      const url = PUBLIC_SUPABASE_URL;
+      const key = PUBLIC_SUPABASE_ANON_KEY;
       
-      if (!url || !key) return;
+      console.log(`[RedditService] Attempting to report thread: ${pairKey} (${type})`, { id: post.id });
 
-      fetch(`${url}/functions/v1/reddit-sync`, {
+      if (!url || !key) {
+        console.warn('[RedditService] Missing Supabase credentials for reporting. Ensure PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY are in your .env');
+        return;
+      }
+
+      const response = await fetch(`${url}/functions/v1/reddit-sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -56,9 +61,16 @@ export class RedditService {
           type: type,
           pair_key: pairKey
         })
-      }).catch(() => {});
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error(`[RedditService] Report failed (${response.status}):`, text);
+      } else {
+        console.log(`[RedditService] Successfully reported thread ${post.id}`);
+      }
     } catch (e) {
-      console.error("Failed to report thread:", e);
+      console.error("[RedditService] Report Exception:", e);
     }
   }
 

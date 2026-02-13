@@ -1,8 +1,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
 
-const REDDIT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+// IMPORTANT: REPLACE THIS with your actual Vercel URL (e.g. https://arr-nba.vercel.app)
+const VERCEL_APP_URL = 'https://your-app-name.vercel.app';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
 
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
   const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -11,66 +19,72 @@ Deno.serve(async (req: Request) => {
   let action: string | null = null;
   let payload: any = {};
   try {
-    const body = await req.text();
-    if (body) {
-      payload = JSON.parse(body);
+    const text = await req.text();
+    if (text) {
+      payload = JSON.parse(text);
       action = payload.action;
     }
   } catch (_e) {}
 
   if (!action) action = new URL(req.url).searchParams.get('action');
-  if (!action) return new Response("Missing action", { status: 400 });
+  console.log(`[SYNC] Action: ${action}`);
 
-  console.log(`--- Action: ${action} ---`);
-
-  // NEW: Let the client report a thread they found
   if (action === 'report') {
     const { id, permalink, type, pair_key } = payload;
-    if (!id || !permalink) return new Response("Missing thread info", { status: 400 });
-
     await supabase.from('active_polls').upsert({
       id, permalink, type, pair_key, status: 'LIVE', last_polled_at: new Date(0).toISOString()
     });
-    return new Response("Thread reported and queued for polling");
+    return new Response(JSON.stringify({ status: 'ok' }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
 
-  // UPDATED: Poll known threads (less likely to be 403'd than Search)
   if (action === 'poll') {
-    const { data: threads } = await supabase
-        .from('active_polls')
-        .select('*')
-        .neq('status', 'STALE')
-        .order('last_polled_at', { ascending: true })
-        .limit(3);
+    for (let i = 0; i < 5; i++) {
+      const { data: threads } = await supabase
+          .from('active_polls')
+          .select('*')
+          .neq('status', 'STALE')
+          .order('last_polled_at', { ascending: true })
+          .limit(3);
 
-    if (!threads || threads.length === 0) return new Response("No threads to poll");
+      if (threads && threads.length > 0) {
+        for (const thread of threads) {
+          const sort = thread.type === 'PGT' ? 'top' : 'new';
+          const redditUrl = `https://www.reddit.com${thread.permalink}.json?sort=${sort}&limit=50`;
 
-    for (const thread of threads) {
-      const sort = thread.type === 'PGT' ? 'top' : 'new';
-      const res = await fetch(`https://www.reddit.com${thread.permalink}.json?sort=${sort}`, {
-        headers: { 'User-Agent': REDDIT_USER_AGENT, 'Accept': 'application/json' }
-      });
+          // WE CALL THE VERCEL BRIDGE HERE
+          const bridgeUrl = `${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(redditUrl)}`;
 
-      if (!res.ok) {
-        console.warn(`Poll failed for ${thread.id}: ${res.status}`);
-        continue;
+          try {
+            console.log(`[POLL] Fetching via Bridge for ${thread.pair_key}...`);
+            const res = await fetch(bridgeUrl);
+
+            if (res.ok) {
+              const json = await res.json();
+              await supabase.from('reddit_cache').upsert({
+                key: `reddit:comments:${thread.id}:${sort}`,
+                data: json,
+                expires_at: new Date(Date.now() + 600000).toISOString(),
+                updated_at: new Date().toISOString()
+              });
+              console.log(`[POLL] Success via Bridge!`);
+            } else {
+              console.error(`[POLL] Bridge Error: ${res.status}`);
+            }
+          } catch (e) {
+            console.error(`[POLL] Bridge Connection Failed`);
+          }
+
+          await supabase.from('active_polls').update({
+            last_polled_at: new Date().toISOString()
+          }).eq('id', thread.id);
+        }
       }
-
-      try {
-        const json = await res.json();
-        await supabase.from('reddit_cache').upsert({
-          key: `reddit:comments:${thread.id}:${sort}`,
-          data: json,
-          expires_at: new Date(Date.now() + (thread.type === 'PGT' ? 3600000 : 60000)).toISOString(),
-          updated_at: new Date().toISOString()
-        });
-        await supabase.from('active_polls').update({ last_polled_at: new Date().toISOString() }).eq('id', thread.id);
-      } catch (_e) {
-        console.error(`JSON Parse failed for ${thread.id}`);
-      }
+      if (i < 4) await new Promise(r => setTimeout(r, 10000));
     }
-    return new Response("Polling Complete");
+    return new Response("Polling Complete", { headers: corsHeaders });
   }
 
-  return new Response("Action not implemented", { status: 400 });
+  return new Response("No Action", { headers: corsHeaders, status: 400 });
 })
