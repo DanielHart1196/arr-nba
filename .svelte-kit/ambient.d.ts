@@ -26,6 +26,7 @@
  * ```
  */
 declare module '$env/static/private' {
+	export const SUPABASE_SERVICE_ROLE_KEY: string;
 	export const ALLUSERSPROFILE: string;
 	export const APPDATA: string;
 	export const ChocolateyInstall: string;
@@ -115,7 +116,7 @@ declare module '$env/static/private' {
  * ```
  */
 declare module '$env/static/public' {
-	
+	export const PUBLIC_SUPABASE_URL: string;
 }
 
 /**
@@ -132,6 +133,7 @@ declare module '$env/static/public' {
  */
 declare module '$env/dynamic/private' {
 	export const env: {
+		SUPABASE_SERVICE_ROLE_KEY: string;
 		ALLUSERSPROFILE: string;
 		APPDATA: string;
 		ChocolateyInstall: string;
@@ -226,6 +228,7 @@ declare module '$env/dynamic/private' {
  */
 declare module '$env/dynamic/public' {
 	export const env: {
+		PUBLIC_SUPABASE_URL: string;
 		[key: `PUBLIC_${string}`]: string | undefined;
 	}
 }

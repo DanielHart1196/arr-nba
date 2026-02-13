@@ -9,6 +9,7 @@
     "dev:host": "vite dev --host"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
     "@sveltejs/adapter-auto": "^3.2.0",
     "@sveltejs/kit": "^2.50.2",
     "autoprefixer": "^10.4.19",
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/adapter-vercel": "^6.3.1",
+    "supabase": "^2.76.8",
     "vite": "^6.3.0"
   }
 }

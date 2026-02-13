@@ -1,5 +1,7 @@
 import type { ICache } from '../cache/cache.interface';
 import { expandTeamNames } from '../utils/team-matching.utils';
+import { createPairKey } from '../utils/reddit.utils';
+import { env as publicEnv } from '$env/dynamic/public';
 import type { 
   RedditThreadMapping,
   RedditSearchRequest,
@@ -11,64 +13,155 @@ import type { IRedditDataSource } from './interfaces';
 import type { RedditTransformer } from './reddit.transformer';
 
 export class RedditService {
+  private supabaseCache: any = null;
+
   constructor(
     private readonly dataSource: IRedditDataSource,
     private readonly transformer: RedditTransformer,
     private readonly cache: ICache
   ) {}
 
+  private async getSupabaseCache() {
+    if (this.supabaseCache) return this.supabaseCache;
+    if (typeof window !== 'undefined') return null;
+
+    try {
+      const { SupabaseCache } = await import('../cache/supabase-cache');
+      this.supabaseCache = new SupabaseCache();
+      return this.supabaseCache;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  private async reportThreadToSupabase(post: RedditPost, type: 'GDT' | 'PGT', pairKey: string) {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const url = publicEnv.PUBLIC_SUPABASE_URL;
+      const key = publicEnv.PUBLIC_SUPABASE_ANON_KEY;
+      
+      if (!url || !key) return;
+
+      fetch(`${url}/functions/v1/reddit-sync`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`
+        },
+        body: JSON.stringify({
+          action: 'report',
+          id: post.id,
+          permalink: post.permalink,
+          type: type,
+          pair_key: pairKey
+        })
+      }).catch(() => {});
+    } catch (e) {
+      console.error("Failed to report thread:", e);
+    }
+  }
+
   async getRedditIndex(): Promise<RedditThreadMapping> {
-    return this.cache.getOrFetch(
-      'reddit:index',
-      async () => {
-        try {
-          const searchJson = await this.dataSource.searchRaw('Daily Game Thread Index');
-          const items = searchJson?.data?.children ?? [];
-          const post = items.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
-          if (!post) return {};
-          
-          const threadJson = await this.dataSource.getThreadContent(post.data.permalink);
-          const { mapping } = this.transformer.transformIndex(threadJson);
-          return mapping;
-        } catch (error) {
-          console.error('Error fetching Reddit Index:', error);
-          return {};
+    const cacheKey = 'reddit:index';
+    const ttl = 10 * 60 * 1000; // 10 minutes
+
+    // Check local cache
+    const localCached = this.cache.get<RedditThreadMapping>(cacheKey);
+    if (localCached && !(localCached instanceof Promise)) return localCached;
+
+    const sb = await this.getSupabaseCache();
+    if (!sb) {
+      const mapping = await this.fetchAndCacheIndex(cacheKey, ttl);
+      // Report found threads to Supabase if in browser
+      if (typeof window !== 'undefined') {
+        for (const [pairKey, entry] of Object.entries(mapping)) {
+          if (entry.gdt) this.reportThreadToSupabase(entry.gdt, 'GDT', pairKey);
+          if (entry.pgt) this.reportThreadToSupabase(entry.pgt, 'PGT', pairKey);
         }
-      },
-      10 * 60 * 1000 // 10 minutes TTL
+      }
+      return mapping;
+    }
+
+    return sb.getOrFetch(
+      cacheKey,
+      () => this.fetchAndCacheIndex(cacheKey, ttl),
+      ttl
     );
+  }
+
+  private async fetchAndCacheIndex(cacheKey: string, ttl: number): Promise<RedditThreadMapping> {
+    try {
+      const searchJson = await this.dataSource.searchRaw('Daily Game Thread Index');
+      const items = searchJson?.data?.children ?? [];
+      const post = items.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
+      if (!post) return {};
+      
+      const threadJson = await this.dataSource.getThreadContent(post.data.permalink);
+      const { mapping } = this.transformer.transformIndex(threadJson);
+      
+      // Update local cache
+      this.cache.set(cacheKey, mapping, ttl);
+      
+      return mapping;
+    } catch (error) {
+      console.error('Error fetching Reddit Index:', error);
+      return {};
+    }
   }
 
   async searchRedditThread(request: RedditSearchRequest): Promise<RedditSearchResponse> {
     const cacheKey = `reddit:search:${JSON.stringify(request)}`;
+    const ttl = 60 * 1000;
     
-    return this.cache.getOrFetch(
+    // Check local cache first for speed
+    const localCached = this.cache.get<RedditSearchResponse>(cacheKey);
+    if (localCached && !(localCached instanceof Promise)) return localCached;
+
+    const sb = await this.getSupabaseCache();
+    if (!sb) {
+      const result = await this.fetchAndCacheSearch(request, cacheKey, ttl);
+      if (result.post && typeof window !== 'undefined') {
+        const pairKey = createPairKey(request.awayCandidates[0], request.homeCandidates[0]);
+        this.reportThreadToSupabase(result.post, request.type === 'post' ? 'PGT' : 'GDT', pairKey);
+      }
+      return result;
+    }
+
+    return sb.getOrFetch(
       cacheKey,
-      async () => {
-        try {
-          const query = this.buildSearchQuery(request);
-          const json = await this.dataSource.searchRaw(query);
-          return this.transformer.transformSearch(json, request.type);
-        } catch (error: any) {
-          // If we hit 403 or 429, try the fallback feed-based search
-          if (error?.message?.includes('403') || error?.message?.includes('429')) {
-            console.warn(`Reddit search failed with ${error.message}, trying feed fallback...`);
-            try {
-              return await this.fallbackSearchFromFeed(request);
-            } catch (fallbackError) {
-              console.error('Fallback search also failed:', fallbackError);
-            }
-          }
-          
-          if (error?.message?.includes('429')) {
-            console.warn('Reddit search rate limited (429)');
-            return { post: undefined };
-          }
-          throw error;
-        }
-      },
-      60 * 1000 // 1 minute TTL for search
+      () => this.fetchAndCacheSearch(request, cacheKey, ttl),
+      ttl
     );
+  }
+
+  private async fetchAndCacheSearch(request: RedditSearchRequest, cacheKey: string, ttl: number): Promise<RedditSearchResponse> {
+    try {
+      const query = this.buildSearchQuery(request);
+      const json = await this.dataSource.searchRaw(query);
+      const result = this.transformer.transformSearch(json, request.type);
+      
+      // Also update local cache
+      this.cache.set(cacheKey, result, ttl);
+      
+      return result;
+    } catch (error: any) {
+      // If we hit 403 or 429, try the fallback feed-based search
+      if (error?.message?.includes('403') || error?.message?.includes('429')) {
+        console.warn(`Reddit search failed with ${error.message}, trying feed fallback...`);
+        try {
+          return await this.fallbackSearchFromFeed(request);
+        } catch (fallbackError) {
+          console.error('Fallback search also failed:', fallbackError);
+        }
+      }
+      
+      if (error?.message?.includes('429')) {
+        console.warn('Reddit search rate limited (429)');
+        return { post: undefined };
+      }
+      throw error;
+    }
   }
 
   private async fallbackSearchFromFeed(request: RedditSearchRequest): Promise<RedditSearchResponse> {
@@ -140,16 +233,34 @@ export class RedditService {
     
     if (bypassCache) {
       this.cache.delete(cacheKey);
+      const sb = await this.getSupabaseCache();
+      if (sb) await sb.delete(cacheKey);
+    } else {
+      // Check local cache first
+      const localCached = this.cache.get<{ comments: RedditComment[] }>(cacheKey);
+      if (localCached && !(localCached instanceof Promise)) return localCached;
     }
     
-    return this.cache.getOrFetch(
+    const sb = await this.getSupabaseCache();
+    if (!sb) {
+      return this.fetchAndCacheComments(postId, sort, permalink, cacheKey, ttl);
+    }
+
+    return sb.getOrFetch(
       cacheKey,
-      async () => {
-        const json = await this.dataSource.getCommentsRaw(postId, sort, permalink);
-        return this.transformer.transformComments(json);
-      },
+      () => this.fetchAndCacheComments(postId, sort, permalink, cacheKey, ttl),
       ttl
     );
+  }
+
+  private async fetchAndCacheComments(postId: string, sort: string, permalink: string | undefined, cacheKey: string, ttl: number): Promise<{ comments: RedditComment[] }> {
+    const json = await this.dataSource.getCommentsRaw(postId, sort, permalink);
+    const result = this.transformer.transformComments(json);
+    
+    // Update local cache
+    this.cache.set(cacheKey, result, ttl);
+    
+    return result;
   }
 
   private buildSearchQuery(request: RedditSearchRequest): string {

@@ -50,6 +50,8 @@ export class NBAService {
   }
 
   cleanupCache(): void {
-    this.cache.cleanup();
+    if (this.cache.cleanup) {
+      this.cache.cleanup();
+    }
   }
 }
