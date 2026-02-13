@@ -76,7 +76,11 @@ export class RedditService {
     try {
       const searchJson = await this.dataSource.searchRaw('Daily Game Thread Index');
       const items = searchJson?.data?.children ?? [];
-      const post = items.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
+      
+      // Look for the absolute newest index post
+      const sortedItems = items.sort((a: any, b: any) => (b.data?.created_utc ?? 0) - (a.data?.created_utc ?? 0));
+      const post = sortedItems.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
+      
       if (!post) return {};
       
       const threadJson = await this.dataSource.getThreadContent(post.data.permalink);

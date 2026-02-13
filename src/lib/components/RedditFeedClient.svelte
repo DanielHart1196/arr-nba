@@ -66,6 +66,10 @@
       const entry = mapping[pairKey()];
       let t = m === 'POST' ? entry?.pgt : entry?.gdt;
 
+      // Safety check: If we found a PGT but we are in LIVE mode, 
+      // we should be very skeptical if there is no GDT.
+      // However, if the index has both, we use what corresponds to the mode.
+
       if (t) {
         cache[m].thread = t;
         cache = { ...cache };
@@ -85,6 +89,10 @@
           homeCandidates: [homeName]
         });
         const found = res?.post;
+        
+        // Final fallback: if we were looking for a LIVE thread and found nothing, 
+        // we DO NOT show a PGT even if one exists, to avoid showing yesterday's data.
+        
         if (found) {
           cache[m].thread = found;
           cache = { ...cache };

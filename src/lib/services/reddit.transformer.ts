@@ -4,18 +4,28 @@ export class RedditTransformer {
   transformSearch(json: any, type: 'live' | 'post'): { post?: RedditPost } {
     const items = json?.data?.children ?? [];
     const now = Date.now() / 1000;
-    const fresh = items.filter((i: any) => (now - (i?.data?.created_utc ?? now)) <= (36 * 3600));
+    
+    // Stricter freshness:
+    // For LIVE threads, must be within last 24 hours.
+    // For POST threads, must be within last 36 hours.
+    const maxAge = type === 'post' ? 36 * 3600 : 24 * 3600;
+    const fresh = items.filter((i: any) => (now - (i?.data?.created_utc ?? now)) <= maxAge);
     
     const filtered = fresh.filter((i: any) => {
       const title = (i?.data?.title || '').toLowerCase();
+      const isPGT = title.includes('post game thread') || title.includes('post-game thread') || title.includes('postgame thread');
+      
       if (type === 'post') {
-        return title.includes('post game thread') || title.includes('post-game thread') || title.includes('postgame thread');
+        return isPGT;
       } else {
-        return title.includes('game thread') && !title.includes('post game thread');
+        return title.includes('game thread') && !isPGT;
       }
     });
 
-    const mapped = filtered.map((i: any) => ({
+    // Sort by creation time to get the ABSOLUTE LATEST one if there are multiple matches
+    const sorted = filtered.sort((a: any, b: any) => (b.data?.created_utc ?? 0) - (a.data?.created_utc ?? 0));
+
+    const mapped = sorted.map((i: any) => ({
       id: i?.data?.id,
       title: i?.data?.title,
       permalink: i?.data?.permalink,
@@ -43,6 +53,7 @@ export class RedditTransformer {
     const selfText = json?.[0]?.data?.children?.[0]?.data?.selftext ?? '';
     const lines: string[] = (selfText as string).split('\n');
     const mapping: RedditThreadMapping = {};
+    const now = Date.now() / 1000;
     
     for (const line of lines) {
       const m = /\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/.exec(line);
@@ -57,6 +68,12 @@ export class RedditTransformer {
       const key = [this.mascotName(awayPart), this.mascotName(homePart)].sort().join('|');
       const idMatch = /comments\/([a-z0-9]+)\//.exec(url);
       const id = idMatch?.[1] ?? '';
+
+      // For index-based discovery, we should be very strict.
+      // If it's a PGT, it really shouldn't be more than a day old if it's appearing in today's index,
+      // but just to be safe against yesterday's games lingering in the index, we will let RedditService handle it if needed.
+      // However, we can add a basic timestamp check here if we had the creation time of the post, 
+      // but the index body doesn't usually have it.
       
       mapping[key] = mapping[key] || {};
       const post: RedditPost = { id, title, url };
@@ -69,14 +86,16 @@ export class RedditTransformer {
     }
     
     // Knicks fallback logic (preserving existing behavior)
+    // NOTE: This fallback ID '1r2i5hi' is likely very old now.
+    // If we're on Feb 13 2026, we should probably remove or update this.
     const knicksKey = ['Knicks', '76ers'].sort().join('|');
     if (!mapping[knicksKey]?.pgt) {
-      mapping[knicksKey] = mapping[knicksKey] || {};
-      mapping[knicksKey].pgt = {
-        id: '1r2i5hi',
-        title: 'Post Game Thread: Knicks vs 76ers',
-        url: 'https://www.reddit.com/r/nba/comments/1r2i5hi/post_game_thread_the_new_york_knicks_3520_defeat/'
-      };
+      // mapping[knicksKey] = mapping[knicksKey] || {};
+      // mapping[knicksKey].pgt = {
+      //   id: '1r2i5hi',
+      //   title: 'Post Game Thread: Knicks vs 76ers',
+      //   url: 'https://www.reddit.com/r/nba/comments/1r2i5hi/post_game_thread_the_new_york_knicks_3520_defeat/'
+      // };
     }
     
     return { mapping };

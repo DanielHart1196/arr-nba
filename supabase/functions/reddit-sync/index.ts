@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
 
 // IMPORTANT: REPLACE THIS with your actual Vercel URL (e.g. https://arr-nba.vercel.app)
-const VERCEL_APP_URL = 'https://your-app-name.vercel.app';
+const VERCEL_APP_URL = 'https://arr-nba.vercel.app';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,6 +37,58 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ status: 'ok' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
+  }
+
+  if (action === 'discover') {
+    console.log("[DISCOVER] Starting automated discovery...");
+    
+    // 1. Fetch Reddit Index via Vercel Bridge
+    const indexSearchUrl = `https://www.reddit.com/r/nba/search.json?q=Daily%20Game%20Thread%20Index&restrict_sr=1&sort=new&limit=1`;
+    const bridgeUrl = `${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(indexSearchUrl)}`;
+    
+    try {
+      const res = await fetch(bridgeUrl);
+      if (!res.ok) throw new Error(`Bridge Error: ${res.status}`);
+      
+      const searchJson = await res.json();
+      const indexPost = searchJson.data?.children?.[0]?.data;
+      
+      if (indexPost) {
+        console.log(`[DISCOVER] Found Index: ${indexPost.title}`);
+        const threadUrl = `https://www.reddit.com${indexPost.permalink}.json`;
+        const threadRes = await fetch(`${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(threadUrl)}`);
+        
+        if (threadRes.ok) {
+          const threadJson = await threadRes.json();
+          const selftext = threadJson[0]?.data?.children?.[0]?.data?.selftext || "";
+          const lines = selftext.split('\n');
+          
+          for (const line of lines) {
+            const m = /\[([^\]]+)\]\((https?:\/\/www\.reddit\.com\/r\/nba\/comments\/([a-z0-9]+)[^\)]*)\)/.exec(line);
+            if (m) {
+              const title = m[1];
+              const permalink = new URL(m[2]).pathname;
+              const id = m[3];
+              const type = title.toLowerCase().includes('post game') ? 'PGT' : 'GDT';
+              
+              // Extract team pair key
+              const parts = title.split(':')[1]?.trim() ?? title;
+              const teams = parts.split(' at ').map((s: string) => s.trim());
+              if (teams.length === 2) {
+                const pair_key = teams.sort().join('|');
+                await supabase.from('active_polls').upsert({
+                  id, permalink, type, pair_key, status: 'LIVE'
+                });
+              }
+            }
+          }
+          console.log("[DISCOVER] Index processed.");
+        }
+      }
+    } catch (e) {
+      console.error(`[DISCOVER] Failed: ${e.message}`);
+    }
+    return new Response("Discovery Complete", { headers: corsHeaders });
   }
 
   if (action === 'poll') {
