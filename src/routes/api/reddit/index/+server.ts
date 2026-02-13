@@ -11,7 +11,11 @@ export const GET = async () => {
   try {
     const mapping = await redditService.getRedditIndex();
     return new Response(JSON.stringify({ mapping }), { status: 200, headers: { 'content-type': 'application/json' } });
-  } catch {
-    return new Response(JSON.stringify({ mapping: {} }), { status: 200 });
+  } catch (error: any) {
+    console.error('Reddit Index API Route Error:', error);
+    return new Response(JSON.stringify({ 
+      mapping: {},
+      error: error?.message || 'Unknown error'
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
 };

@@ -28,7 +28,12 @@ export const GET = async ({ params, url }: any) => {
 
     const value = await redditService.getRedditComments(id, sort, permalink, bypassCache);
     return new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
-  } catch {
-    return new Response(JSON.stringify({ comments: [] }), { status: 200 });
+  } catch (error: any) {
+    console.error('Reddit API Route Error:', error);
+    return new Response(JSON.stringify({ 
+      comments: [], 
+      error: error?.message || 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
 };

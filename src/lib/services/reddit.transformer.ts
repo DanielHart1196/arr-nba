@@ -28,7 +28,15 @@ export class RedditTransformer {
   }
 
   transformComments(json: any): { comments: RedditComment[] } {
-    return { comments: this.toTree(json?.[1]) };
+    if (!json || !Array.isArray(json)) {
+      console.error('Reddit Transformer: Invalid JSON structure for comments:', JSON.stringify(json)?.slice(0, 200));
+      return { comments: [] };
+    }
+    const commentsData = json[1];
+    if (!commentsData) {
+      console.warn('Reddit Transformer: No comments data found in json[1]');
+    }
+    return { comments: this.toTree(commentsData) };
   }
 
   transformIndex(json: any): { mapping: RedditThreadMapping } {
@@ -95,8 +103,13 @@ export class RedditTransformer {
   }
 
   private toTree(json: any, depth = 0): RedditComment[] {
-    if (!json) return [];
-    const arr = json?.data?.children ?? [];
+    if (!json || !json.data || !json.data.children) {
+      if (depth === 0) {
+        console.warn('Reddit Transformer: toTree called with invalid structure:', JSON.stringify(json)?.slice(0, 200));
+      }
+      return [];
+    }
+    const arr = json.data.children;
     const nodes: RedditComment[] = [];
     for (const i of arr) {
       const d = i?.data;
@@ -108,7 +121,7 @@ export class RedditTransformer {
         body: d?.body ?? '',
         created_utc: d?.created_utc ?? 0
       };
-      if (depth < 2 && d?.replies) {
+      if (depth < 2 && d?.replies && typeof d.replies === 'object') {
         node.replies = this.toTree(d.replies, depth + 1);
       }
       nodes.push(node);

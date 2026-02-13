@@ -19,9 +19,12 @@ export const POST = async ({ request }: any) => {
     
     console.log(`Fallback search query: ${query}`);
     
-    const res = await fetch(`https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=week`);
+    const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 (arr-nba app)';
+    const res = await fetch(`https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=week`, {
+      headers: { 'User-Agent': USER_AGENT }
+    });
     if (!res.ok) {
-      return new Response(JSON.stringify({ error: 'Search failed' }), { status: 500 });
+      return new Response(JSON.stringify({ error: `Search failed: ${res.status}` }), { status: 500 });
     }
     
     const json = await res.json();

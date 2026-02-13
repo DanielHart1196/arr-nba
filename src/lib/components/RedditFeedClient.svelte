@@ -8,6 +8,7 @@
 
   let sortChoice = 'new';
   let loading = false;
+  let errorMsg = '';
   let triedFetch = { LIVE: false, POST: false };
 
   // Local cache for switching between views instantly
@@ -31,6 +32,7 @@
   async function fetchCommentsFor(t, sort, m) {
     if (!t) return;
     
+    errorMsg = '';
     // Check cache first to avoid showing "Loading..." if data is already there
     const cached = await nbaService.getRedditComments(t.id, sort, t.permalink);
     if (cached && cached.comments && cached.comments.length > 0) {
@@ -42,12 +44,15 @@
 
     try {
       const res = await nbaService.getRedditComments(t.id, sort, t.permalink);
+      if (res.error) errorMsg = res.error;
+      
       if (mode === m) {
         cache[m].comments = sortedCopy(res.comments ?? [], sort === 'top' ? 'top' : 'new');
         cache = { ...cache };
       }
     } catch (err) {
       console.error('Failed to fetch comments:', err);
+      errorMsg = err.message || 'Failed to fetch comments';
     } finally {
       if (mode === m) loading = false;
     }
@@ -169,14 +174,17 @@
     const t = cache[mode].thread;
     if (!t) return;
     loading = true;
+    errorMsg = '';
     try {
       const sort = mode === 'POST' ? 'top' : 'new';
       const res = await nbaService.getRedditComments(t.id, sort, t.permalink, true);
+      if (res.error) errorMsg = res.error;
       cache[mode].comments = sortedCopy(res.comments ?? [], sortChoice);
       cache = { ...cache };
       loading = false;
     } catch (error) {
       console.error('Failed to refresh comments:', error);
+      errorMsg = error.message || 'Failed to refresh comments';
       loading = false;
     }
   }
@@ -197,6 +205,12 @@
     <div class="text-white/70 flex items-center gap-2">
       <div class="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></div>
       Loading comments...
+    </div>
+  {:else if errorMsg}
+    <div class="bg-red-900/20 border border-red-500/50 rounded p-3 mb-3">
+      <div class="text-red-400 font-semibold mb-1">Reddit Error</div>
+      <div class="text-sm text-red-300/80">{errorMsg}</div>
+      <button class="mt-2 text-xs underline text-red-400 hover:text-red-300" on:click={refreshComments}>Try again</button>
     </div>
   {:else if !thread}
     <div class="text-white/70">No comments yet.</div>

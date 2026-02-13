@@ -19,8 +19,11 @@ export const POST = async ({ request }: any) => {
 
     const payload = await redditService.searchRedditThread(body);
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Reddit search error:', error);
-    return new Response(JSON.stringify({ post: null }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ 
+      post: null,
+      error: error?.message || 'Unknown error'
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
 };

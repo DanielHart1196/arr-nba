@@ -3,6 +3,7 @@ import type { RedditPost, RedditComment, RedditSearchRequest } from '$lib/types/
 
 export class RedditDataSource implements IRedditDataSource {
   private readonly BASE_URL = '/api/reddit';
+  private readonly USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 (arr-nba app)';
 
   async getIndex(): Promise<any> {
     if (typeof window !== 'undefined') {
@@ -10,8 +11,19 @@ export class RedditDataSource implements IRedditDataSource {
       if (!res.ok) throw new Error(`Reddit Index error: ${res.status}`);
       return res.json();
     } else {
-      const res = await fetch('https://www.reddit.com/r/nba/search.json?q=Daily%20Game%20Thread%20Index&restrict_sr=1&sort=new');
-      if (!res.ok) throw new Error(`Reddit Index error: ${res.status}`);
+      const url = 'https://www.reddit.com/r/nba/search.json?q=Daily%20Game%20Thread%20Index&restrict_sr=1&sort=new';
+      console.log(`Fetching Reddit index from: ${url}`);
+      const res = await fetch(url, {
+        headers: { 
+          'User-Agent': this.USER_AGENT,
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Reddit Index error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`Reddit Index error: ${res.status}`);
+      }
       return res.json();
     }
   }
@@ -26,8 +38,19 @@ export class RedditDataSource implements IRedditDataSource {
       if (!res.ok) throw new Error(`Reddit Search error: ${res.status}`);
       return res.json();
     } else {
-      const res = await fetch(`https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=week`);
-      if (!res.ok) throw new Error(`Reddit Search error: ${res.status}`);
+      const url = `https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=week`;
+      console.log(`Searching Reddit with: ${url}`);
+      const res = await fetch(url, {
+        headers: { 
+          'User-Agent': this.USER_AGENT,
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Reddit Search error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`Reddit Search error: ${res.status}`);
+      }
       return res.json();
     }
   }
@@ -42,9 +65,20 @@ export class RedditDataSource implements IRedditDataSource {
       if (!res.ok) throw new Error(`Reddit Comments error: ${res.status}`);
       return res.json();
     } else {
+      // Use standard .json endpoint for comments
       const target = permalink ? `https://www.reddit.com${permalink}.json?sort=${sort}` : `https://www.reddit.com/comments/${postId}.json?sort=${sort}`;
-      const res = await fetch(target);
-      if (!res.ok) throw new Error(`Reddit Comments error: ${res.status}`);
+      console.log(`Fetching Reddit comments from: ${target}`);
+      const res = await fetch(target, {
+        headers: { 
+          'User-Agent': this.USER_AGENT,
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Reddit Comments error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`Reddit Comments error: ${res.status}`);
+      }
       return res.json();
     }
   }
@@ -58,14 +92,29 @@ export class RedditDataSource implements IRedditDataSource {
       if (!res.ok) throw new Error(`Reddit Thread Content error: ${res.status}`);
       return res.json();
     } else {
-      const res = await fetch(`https://www.reddit.com${permalink}.json`);
-      if (!res.ok) throw new Error(`Reddit Thread Content error: ${res.status}`);
+      const url = `https://www.reddit.com${permalink}.json`;
+      console.log(`Fetching Reddit thread content from: ${url}`);
+      const res = await fetch(url, {
+        headers: { 
+          'User-Agent': this.USER_AGENT,
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Reddit Thread Content error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`Reddit Thread Content error: ${res.status}`);
+      }
       return res.json();
     }
   }
 
   async fetchRaw(url: string): Promise<any> {
-    const res = await fetch(url);
+    const options: RequestInit = {};
+    if (typeof window === 'undefined') {
+      options.headers = { 'User-Agent': this.USER_AGENT };
+    }
+    const res = await fetch(url, options);
     if (!res.ok) throw new Error(`Reddit fetchRaw error: ${res.status}`);
     return res.json();
   }
