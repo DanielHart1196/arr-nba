@@ -74,36 +74,69 @@ export class RedditService {
     if (localCached && !(localCached instanceof Promise)) return localCached;
 
     try {
-      const searchJson = await this.dataSource.searchRaw('Daily Game Thread Index');
+      let searchJson: any;
+      try {
+        searchJson = await this.dataSource.searchRaw('Daily Game Thread Index');
+      } catch (e: any) {
+        if (e.message.includes('403') || e.message.includes('429')) {
+          console.warn('Reddit Index search blocked, falling back to hot feed');
+          searchJson = await this.dataSource.getSubredditFeed('nba', 'hot');
+        } else {
+          throw e;
+        }
+      }
+
       const items = searchJson?.data?.children ?? [];
       
       // Look for the absolute newest index post
       const sortedItems = items.sort((a: any, b: any) => (b.data?.created_utc ?? 0) - (a.data?.created_utc ?? 0));
       const post = sortedItems.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
       
-      if (!post) return {};
-      
-      const threadJson = await this.dataSource.getThreadContent(post.data.permalink);
-      const { mapping } = this.transformer.transformIndex(threadJson);
-      this.cache.set(cacheKey, mapping, 600000);
-
-      // Report found threads to Supabase if in browser
-      if (typeof window !== 'undefined') {
-        for (const [pairKey, entry] of Object.entries(mapping)) {
-          if (entry.gdt) this.reportThreadToSupabase(entry.gdt, 'GDT', pairKey);
-          if (entry.pgt) this.reportThreadToSupabase(entry.pgt, 'PGT', pairKey);
+      if (!post) {
+        // One last try: if we tried search and it returned nothing (but not error), try hot
+        if (items.length > 0 && !items.some((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'))) {
+           const hotFeed = await this.dataSource.getSubredditFeed('nba', 'hot');
+           const hotPost = hotFeed?.data?.children?.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'));
+           if (hotPost) return this.processIndexPost(hotPost.data, cacheKey);
         }
+        return {};
       }
-      return mapping;
+      
+      return this.processIndexPost(post.data, cacheKey);
     } catch (error) {
       console.error('Error fetching Reddit Index:', error);
       return {};
     }
   }
 
+  private async processIndexPost(indexPost: any, cacheKey: string): Promise<RedditThreadMapping> {
+    const threadJson = await this.dataSource.getThreadContent(indexPost.permalink);
+    const { mapping } = this.transformer.transformIndex(threadJson);
+    this.cache.set(cacheKey, mapping, 600000);
+
+    // Report found threads to Supabase if in browser
+    if (typeof window !== 'undefined') {
+      for (const [pairKey, entry] of Object.entries(mapping)) {
+        if (entry.gdt) this.reportThreadToSupabase(entry.gdt, 'GDT', pairKey);
+        if (entry.pgt) this.reportThreadToSupabase(entry.pgt, 'PGT', pairKey);
+      }
+    }
+    return mapping;
+  }
+
   async searchRedditThread(request: RedditSearchRequest): Promise<RedditSearchResponse> {
     const query = this.buildSearchQuery(request);
-    const json = await this.dataSource.searchRaw(query);
+    let json: any;
+    try {
+      json = await this.dataSource.searchRaw(query);
+    } catch (e: any) {
+      if (e.message.includes('403') || e.message.includes('429')) {
+        console.warn('Reddit search blocked, falling back to feed-based search');
+        return this.fallbackSearchFromFeed(request);
+      }
+      throw e;
+    }
+
     const result = this.transformer.transformSearch(json, request.type);
 
     if (result.post && typeof window !== 'undefined') {
@@ -112,6 +145,36 @@ export class RedditService {
     }
 
     return result;
+  }
+
+  private async fallbackSearchFromFeed(request: RedditSearchRequest): Promise<RedditSearchResponse> {
+    try {
+      // Fetch both 'new' and 'hot' to increase chances of finding it
+      const [newFeed, hotFeed] = await Promise.all([
+        this.dataSource.getSubredditFeed('nba', 'new'),
+        this.dataSource.getSubredditFeed('nba', 'hot')
+      ]);
+
+      const allPosts = [
+        ...(newFeed?.data?.children ?? []),
+        ...(hotFeed?.data?.children ?? [])
+      ];
+
+      // Deduplicate by ID
+      const seen = new Set();
+      const uniquePosts = allPosts.filter((p: any) => {
+        if (seen.has(p.data.id)) return false;
+        seen.add(p.data.id);
+        return true;
+      });
+
+      // Wrap in a structure that transformer expects
+      const wrappedJson = { data: { children: uniquePosts } };
+      return this.transformer.transformSearch(wrappedJson, request.type === 'post' ? 'post' : 'live');
+    } catch (e) {
+      console.error('Fallback feed search failed:', e);
+      return { post: undefined };
+    }
   }
 
   async getRedditComments(postId: string, sort: 'new' | 'top' = 'new', permalink?: string, bypassCache: boolean = false): Promise<{ comments: RedditComment[] }> {

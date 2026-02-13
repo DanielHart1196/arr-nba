@@ -42,16 +42,39 @@ Deno.serve(async (req: Request) => {
   if (action === 'discover') {
     console.log("[DISCOVER] Starting automated discovery...");
     
-    // 1. Fetch Reddit Index via Vercel Bridge
-    const indexSearchUrl = `https://www.reddit.com/r/nba/search.json?q=Daily%20Game%20Thread%20Index&restrict_sr=1&sort=new&limit=1`;
-    const bridgeUrl = `${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(indexSearchUrl)}`;
+    let searchJson: any = null;
+    
+    // Try Search first
+    try {
+      const indexSearchUrl = `https://www.reddit.com/r/nba/search.json?q=Daily%20Game%20Thread%20Index&restrict_sr=1&sort=new&limit=2`;
+      const bridgeUrl = `${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(indexSearchUrl)}`;
+      const res = await fetch(bridgeUrl);
+      if (res.ok) {
+        searchJson = await res.json();
+      } else {
+        console.warn(`[DISCOVER] Search failed (${res.status}), trying Hot feed...`);
+      }
+    } catch (e) {
+      console.warn(`[DISCOVER] Search exception: ${e.message}`);
+    }
+
+    // Fallback to Hot feed if search failed
+    if (!searchJson || !searchJson.data?.children?.length) {
+      try {
+        const hotUrl = `https://www.reddit.com/r/nba/hot.json?limit=10`;
+        const bridgeUrl = `${VERCEL_APP_URL}/api/reddit/proxy?url=${encodeURIComponent(hotUrl)}`;
+        const res = await fetch(bridgeUrl);
+        if (res.ok) {
+          searchJson = await res.json();
+        }
+      } catch (e) {
+        console.error(`[DISCOVER] Hot fallback failed: ${e.message}`);
+      }
+    }
     
     try {
-      const res = await fetch(bridgeUrl);
-      if (!res.ok) throw new Error(`Bridge Error: ${res.status}`);
-      
-      const searchJson = await res.json();
-      const indexPost = searchJson.data?.children?.[0]?.data;
+      const items = searchJson?.data?.children ?? [];
+      const indexPost = items.find((i: any) => i?.data?.title?.toLowerCase()?.includes('daily game thread index'))?.data;
       
       if (indexPost) {
         console.log(`[DISCOVER] Found Index: ${indexPost.title}`);

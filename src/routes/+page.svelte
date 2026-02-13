@@ -220,7 +220,16 @@
   function formatLocalTime(dateStr: string) {
     try {
       const date = new Date(dateStr);
-      return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const timeStr = date.toLocaleTimeString(undefined, { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false
+      });
+      
+      // Get timezone abbreviation (e.g., AEST)
+      const tzStr = date.toLocaleTimeString('en-AU', { timeZoneName: 'short' }).split(' ').pop();
+      
+      return `${timeStr} ${tzStr}`;
     } catch {
       return '';
     }
@@ -269,7 +278,8 @@
            on:mouseenter={() => { prewarmRedditData(e); nbaService.getBoxscore(e.id).catch(() => {}); }}
            on:touchstart={() => { prewarmRedditData(e); nbaService.getBoxscore(e.id).catch(() => {}); }}
            class="block border border-white/10 rounded p-3 hover:border-white/20">
-          <div class="grid grid-cols-5 grid-rows-2 gap-x-3 items-center">
+          <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
+            <!-- Away Logo -->
             <div class="row-span-2 justify-self-center">
               <img
                 src={`/logos/${getTeamLogoAbbr(e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.team)}.svg`}
@@ -278,13 +288,21 @@
                 on:error={(event) => { (event.currentTarget).style.display='none'; }}
               />
             </div>
+
+            <!-- Away Abbr -->
             <div class="text-center font-medium">
               {getTeamLogoAbbr(e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.team)}
             </div>
+
+            <!-- Separator -->
             <div class="text-center text-white/70 font-medium">@</div>
+
+            <!-- Home Abbr -->
             <div class="text-center font-medium">
               {getTeamLogoAbbr(e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.team)}
             </div>
+
+            <!-- Home Logo -->
             <div class="row-span-2 justify-self-center">
               <img
                 src={`/logos/${getTeamLogoAbbr(e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.team)}.svg`}
@@ -293,18 +311,30 @@
                 on:error={(event) => { (event.currentTarget).style.display='none'; }}
               />
             </div>
-            <div class="text-right">
-              {hideScores ? '-' : e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.score}
+
+            <!-- Away Score -->
+            <div class="text-center">
+              { (e?.competitions?.[0]?.status?.type?.name === 'STATUS_SCHEDULED' || hideScores) 
+                ? '-' 
+                : (e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='away')?.score ?? 0) 
+              }
             </div>
-            <div class="text-center text-white/70">
+
+            <!-- Status / Time -->
+            <div class="text-center text-white/70 whitespace-nowrap">
               {#if e?.competitions?.[0]?.status?.type?.name === 'STATUS_SCHEDULED'}
                 {formatLocalTime(e.date)}
               {:else}
                 {e?.competitions?.[0]?.status?.type?.shortDetail}
               {/if}
             </div>
-            <div class="text-left">
-              {hideScores ? '-' : e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.score}
+
+            <!-- Home Score -->
+            <div class="text-center">
+              { (e?.competitions?.[0]?.status?.type?.name === 'STATUS_SCHEDULED' || hideScores) 
+                ? '-' 
+                : (e?.competitions?.[0]?.competitors?.find((c)=>c.homeAway==='home')?.score ?? 0) 
+              }
             </div>
           </div>
         </a>
