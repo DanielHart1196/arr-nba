@@ -14,5 +14,6 @@ export interface IRedditDataSource {
   searchRaw(query: string): Promise<any>;
   getCommentsRaw(postId: string, sort: string, permalink?: string): Promise<any>;
   getThreadContent(permalink: string): Promise<any>;
+  getSubredditFeed(subreddit: string, sort?: 'new' | 'hot'): Promise<any>;
   fetchRaw(url: string): Promise<any>;
 }

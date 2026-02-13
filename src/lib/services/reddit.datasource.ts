@@ -62,7 +62,14 @@ export class RedditDataSource implements IRedditDataSource {
       if (permalink) url.searchParams.set('permalink', permalink);
       
       const res = await fetch(url.toString());
-      if (!res.ok) throw new Error(`Reddit Comments error: ${res.status}`);
+      if (!res.ok) {
+        // Fallback to direct client-side fetch if API route fails (403/429/etc)
+        console.warn(`Reddit Comments API Route error ${res.status}, trying direct fetch...`);
+        const directUrl = permalink ? `https://www.reddit.com${permalink}.json?sort=${sort}` : `https://www.reddit.com/comments/${postId}.json?sort=${sort}`;
+        const directRes = await fetch(directUrl);
+        if (!directRes.ok) throw new Error(`Reddit Comments direct error: ${directRes.status}`);
+        return directRes.json();
+      }
       return res.json();
     } else {
       // Use standard .json endpoint for comments
@@ -104,6 +111,29 @@ export class RedditDataSource implements IRedditDataSource {
         const text = await res.text();
         console.error(`Reddit Thread Content error ${res.status}: ${text.slice(0, 100)}`);
         throw new Error(`Reddit Thread Content error: ${res.status}`);
+      }
+      return res.json();
+    }
+  }
+
+  async getSubredditFeed(subreddit: string, sort: 'new' | 'hot' = 'new'): Promise<any> {
+    if (typeof window !== 'undefined') {
+      const res = await fetch(`${this.BASE_URL}/subreddit/${subreddit}?sort=${sort}`);
+      if (!res.ok) throw new Error(`Reddit Subreddit Feed error: ${res.status}`);
+      return res.json();
+    } else {
+      const url = `https://www.reddit.com/r/${subreddit}/${sort}.json?limit=100`;
+      console.log(`Fetching Reddit subreddit feed from: ${url}`);
+      const res = await fetch(url, {
+        headers: { 
+          'User-Agent': this.USER_AGENT,
+          'Accept': 'application/json'
+        }
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Reddit Subreddit Feed error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`Reddit Subreddit Feed error: ${res.status}`);
       }
       return res.json();
     }
