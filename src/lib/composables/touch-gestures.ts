@@ -1,4 +1,4 @@
-import { onMount, onDestroy } from 'svelte';
+import { onDestroy } from 'svelte';
 
 export interface TouchGestureOptions {
   onSwipeLeft?: () => void;
@@ -76,8 +76,8 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
   
   // Attach immediately to avoid lifecycle race conditions
   if (typeof window !== 'undefined') {
-    target.addEventListener('touchstart', handleTouchStart as any, { capture: true, passive: false });
-    target.addEventListener('touchend', handleTouchEnd as any, { capture: true, passive: false });
+    target.addEventListener('touchstart', handleTouchStart as any, { capture: true, passive: true });
+    target.addEventListener('touchend', handleTouchEnd as any, { capture: true, passive: true });
   }
   
   const cleanup = () => {

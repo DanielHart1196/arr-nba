@@ -9,8 +9,15 @@ interface CacheEntry<T> {
 export class APICache implements ICache {
   private cache = new Map<string, CacheEntry<any>>();
   private defaultTTL = 5 * 60 * 1000; // 5 minutes
+  private maxEntries = 400;
 
   set<T>(key: string, data: T, ttl: number = this.defaultTTL): void {
+    // Keep the cache bounded to avoid unbounded memory growth over long sessions.
+    if (!this.cache.has(key) && this.cache.size >= this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+
     this.cache.set(key, {
       data,
       timestamp: Date.now(),

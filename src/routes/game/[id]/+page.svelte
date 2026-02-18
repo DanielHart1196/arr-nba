@@ -3,11 +3,12 @@
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
+  import { refreshLiveRedditForMatch } from '../../../lib/services/reddit-prewarm.service';
   import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   
-  export let data: any;
-  let payload: BoxscoreResponse | any = null;
+  export let data: { id: string; streamed?: { payload?: Promise<BoxscoreResponse> } };
+  let payload: BoxscoreResponse | null = null;
   let interval: any;
   let redditInterval: any;
   
@@ -34,17 +35,9 @@
     const homeName = payload?.linescores?.home?.team?.displayName;
     
     if (!awayName || !homeName) return;
-    
-    const pairKey = [normalizeMascot(awayName), normalizeMascot(homeName)].sort().join('|');
-    
-    try {
-      // Refresh live comments more aggressively
-      const mapping = await nbaService.getRedditIndex();
-      const liveThread = mapping?.[pairKey]?.gdt;
 
-      if (liveThread) {
-        await nbaService.getRedditComments(liveThread.id, 'new', liveThread.permalink, true);
-      }
+    try {
+      await refreshLiveRedditForMatch(nbaService, awayName, homeName);
     } catch (error) {
       console.error('Failed to refresh Reddit data:', error);
     }
@@ -76,10 +69,10 @@
     }
     return str.toUpperCase();
   }
-  function normalizeMascot(name: string): string {
-    const s = (name || '').toLowerCase();
-    if (s.includes('trail blazers')) return 'Trail Blazers';
-    return name;
+
+  function hideBrokenImage(event: Event) {
+    const img = event.currentTarget as HTMLImageElement | null;
+    if (img) img.style.display = 'none';
   }
 </script>
 
@@ -93,7 +86,7 @@
             src={`/logos/${getTeamLogoAbbr(payload?.linescores?.away?.team)}.svg`}
             alt="away"
             width="28" height="28" loading="eager" decoding="async"
-            on:error={(e)=>{(e.currentTarget).style.display='none';}}
+            on:error={hideBrokenImage}
           />
           <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
         </div>
@@ -104,7 +97,7 @@
             src={`/logos/${getTeamLogoAbbr(payload?.linescores?.home?.team)}.svg`}
             alt="home"
             width="28" height="28" loading="eager" decoding="async"
-            on:error={(e)=>{(e.currentTarget).style.display='none';}}
+            on:error={hideBrokenImage}
           />
         </div>
       </div>

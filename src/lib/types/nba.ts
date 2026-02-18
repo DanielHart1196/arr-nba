@@ -27,6 +27,7 @@ export interface Status {
   type: {
     description: string;
     shortDetail?: string;
+    name?: string;
   };
   clock?: string;
   period?: number;
@@ -53,9 +54,14 @@ export interface Player {
 
 export interface BoxscoreResponse {
   id: string;
+  boxscore?: any;
   players: {
     home: Player[];
     away: Player[];
+  };
+  names?: {
+    home?: string;
+    away?: string;
   };
   linescores: {
     home: {

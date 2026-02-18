@@ -30,6 +30,10 @@ declare module '$env/static/private' {
 	export const APPDATA: string;
 	export const ChocolateyInstall: string;
 	export const ChocolateyLastPathUpdate: string;
+	export const CHROME_CRASHPAD_PIPE_NAME: string;
+	export const CODEX_INTERNAL_ORIGINATOR_OVERRIDE: string;
+	export const CODEX_SANDBOX_NETWORK_DISABLED: string;
+	export const CODEX_THREAD_ID: string;
 	export const COLOR: string;
 	export const CommonProgramFiles: string;
 	export const CommonProgramW6432: string;
@@ -37,15 +41,14 @@ declare module '$env/static/private' {
 	export const ComSpec: string;
 	export const DriverData: string;
 	export const EDITOR: string;
-	export const EFC_1988: string;
-	export const FIG_TERM: string;
+	export const EFC_16872: string;
+	export const ELECTRON_RUN_AS_NODE: string;
 	export const FPS_BROWSER_APP_PROFILE_STRING: string;
 	export const FPS_BROWSER_USER_PROFILE_STRING: string;
 	export const HOME: string;
 	export const HOMEDRIVE: string;
 	export const HOMEPATH: string;
 	export const INIT_CWD: string;
-	export const INTELLIJ_TERMINAL_COMMAND_BLOCKS_REWORKED: string;
 	export const INTEL_DEV_REDIST: string;
 	export const LOCALAPPDATA: string;
 	export const LOGONSERVER: string;
@@ -58,6 +61,7 @@ declare module '$env/static/private' {
 	export const npm_config_global_prefix: string;
 	export const npm_config_init_module: string;
 	export const npm_config_local_prefix: string;
+	export const npm_config_loglevel: string;
 	export const npm_config_node_gyp: string;
 	export const npm_config_noproxy: string;
 	export const npm_config_npm_version: string;
@@ -74,34 +78,37 @@ declare module '$env/static/private' {
 	export const OneDrive: string;
 	export const OneDriveCommercial: string;
 	export const OS: string;
-	export const Path: string;
+	export const PATH: string;
 	export const PATHEXT: string;
 	export const PROCESSOR_ARCHITECTURE: string;
 	export const PROCESSOR_IDENTIFIER: string;
 	export const PROCESSOR_LEVEL: string;
 	export const PROCESSOR_REVISION: string;
-	export const PROCESS_LAUNCHED_BY_CW: string;
-	export const PROCESS_LAUNCHED_BY_Q: string;
 	export const ProgramData: string;
 	export const ProgramFiles: string;
 	export const ProgramW6432: string;
 	export const PROMPT: string;
-	export const PSExecutionPolicyPreference: string;
 	export const PSModulePath: string;
 	export const PUBLIC: string;
+	export const RUST_LOG: string;
 	export const SESSIONNAME: string;
 	export const SystemDrive: string;
 	export const SystemRoot: string;
 	export const TEMP: string;
-	export const TERM: string;
-	export const TERMINAL_EMULATOR: string;
-	export const TERM_SESSION_ID: string;
 	export const TMP: string;
 	export const USERDOMAIN: string;
 	export const USERDOMAIN_ROAMINGPROFILE: string;
 	export const USERNAME: string;
 	export const USERPROFILE: string;
 	export const VBOX_HWVIRTEX_IGNORE_SVM_IN_USE: string;
+	export const VSCODE_CODE_CACHE_PATH: string;
+	export const VSCODE_CRASH_REPORTER_PROCESS_TYPE: string;
+	export const VSCODE_CWD: string;
+	export const VSCODE_ESM_ENTRYPOINT: string;
+	export const VSCODE_HANDLES_UNCAUGHT_ERRORS: string;
+	export const VSCODE_IPC_HOOK: string;
+	export const VSCODE_NLS_CONFIG: string;
+	export const VSCODE_PID: string;
 	export const windir: string;
 }
 
@@ -115,8 +122,7 @@ declare module '$env/static/private' {
  * ```
  */
 declare module '$env/static/public' {
-	export const PUBLIC_SUPABASE_URL: string;
-	export const PUBLIC_SUPABASE_ANON_KEY: string;
+	
 }
 
 /**
@@ -137,6 +143,10 @@ declare module '$env/dynamic/private' {
 		APPDATA: string;
 		ChocolateyInstall: string;
 		ChocolateyLastPathUpdate: string;
+		CHROME_CRASHPAD_PIPE_NAME: string;
+		CODEX_INTERNAL_ORIGINATOR_OVERRIDE: string;
+		CODEX_SANDBOX_NETWORK_DISABLED: string;
+		CODEX_THREAD_ID: string;
 		COLOR: string;
 		CommonProgramFiles: string;
 		CommonProgramW6432: string;
@@ -144,15 +154,14 @@ declare module '$env/dynamic/private' {
 		ComSpec: string;
 		DriverData: string;
 		EDITOR: string;
-		EFC_1988: string;
-		FIG_TERM: string;
+		EFC_16872: string;
+		ELECTRON_RUN_AS_NODE: string;
 		FPS_BROWSER_APP_PROFILE_STRING: string;
 		FPS_BROWSER_USER_PROFILE_STRING: string;
 		HOME: string;
 		HOMEDRIVE: string;
 		HOMEPATH: string;
 		INIT_CWD: string;
-		INTELLIJ_TERMINAL_COMMAND_BLOCKS_REWORKED: string;
 		INTEL_DEV_REDIST: string;
 		LOCALAPPDATA: string;
 		LOGONSERVER: string;
@@ -165,6 +174,7 @@ declare module '$env/dynamic/private' {
 		npm_config_global_prefix: string;
 		npm_config_init_module: string;
 		npm_config_local_prefix: string;
+		npm_config_loglevel: string;
 		npm_config_node_gyp: string;
 		npm_config_noproxy: string;
 		npm_config_npm_version: string;
@@ -181,34 +191,37 @@ declare module '$env/dynamic/private' {
 		OneDrive: string;
 		OneDriveCommercial: string;
 		OS: string;
-		Path: string;
+		PATH: string;
 		PATHEXT: string;
 		PROCESSOR_ARCHITECTURE: string;
 		PROCESSOR_IDENTIFIER: string;
 		PROCESSOR_LEVEL: string;
 		PROCESSOR_REVISION: string;
-		PROCESS_LAUNCHED_BY_CW: string;
-		PROCESS_LAUNCHED_BY_Q: string;
 		ProgramData: string;
 		ProgramFiles: string;
 		ProgramW6432: string;
 		PROMPT: string;
-		PSExecutionPolicyPreference: string;
 		PSModulePath: string;
 		PUBLIC: string;
+		RUST_LOG: string;
 		SESSIONNAME: string;
 		SystemDrive: string;
 		SystemRoot: string;
 		TEMP: string;
-		TERM: string;
-		TERMINAL_EMULATOR: string;
-		TERM_SESSION_ID: string;
 		TMP: string;
 		USERDOMAIN: string;
 		USERDOMAIN_ROAMINGPROFILE: string;
 		USERNAME: string;
 		USERPROFILE: string;
 		VBOX_HWVIRTEX_IGNORE_SVM_IN_USE: string;
+		VSCODE_CODE_CACHE_PATH: string;
+		VSCODE_CRASH_REPORTER_PROCESS_TYPE: string;
+		VSCODE_CWD: string;
+		VSCODE_ESM_ENTRYPOINT: string;
+		VSCODE_HANDLES_UNCAUGHT_ERRORS: string;
+		VSCODE_IPC_HOOK: string;
+		VSCODE_NLS_CONFIG: string;
+		VSCODE_PID: string;
 		windir: string;
 		[key: `PUBLIC_${string}`]: undefined;
 		[key: `${string}`]: string | undefined;
@@ -227,8 +240,6 @@ declare module '$env/dynamic/private' {
  */
 declare module '$env/dynamic/public' {
 	export const env: {
-		PUBLIC_SUPABASE_URL: string;
-		PUBLIC_SUPABASE_ANON_KEY: string;
 		[key: `PUBLIC_${string}`]: string | undefined;
 	}
 }

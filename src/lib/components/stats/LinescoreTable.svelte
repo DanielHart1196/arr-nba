@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { getTeamLogoAbbr } from '../../utils/team.utils';
   import type { Team } from '../../types/nba';
 
   export let linescores: { home: { team: Team; periods: number[]; total: number }; away: { team: Team; periods: number[]; total: number } };
