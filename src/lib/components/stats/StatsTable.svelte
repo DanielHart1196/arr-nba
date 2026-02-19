@@ -9,7 +9,7 @@
   const percentKeys = ['FG%', '3P%', 'FT%'] as const;
   const baseTotalKeys = statCols.filter((k) => k !== 'MIN' && k !== '+/-' && !percentKeys.includes(k as (typeof percentKeys)[number]));
 
-  function getStat(row: Player, key: string) {
+  function formatStat(row: Player, key: string) {
     if (key === 'FG%') return row.stats['FG%'] + '%';
     if (key === '3P%') return row.stats['3P%'] + '%';
     if (key === 'FT%') return row.stats['FT%'] + '%';
@@ -53,7 +53,11 @@
   }
 
   $: safePlayers = players ?? [];
-  $: displayRows = safePlayers.map((row) => ({ ...row, displayName: formatName(row?.name ?? '') }));
+  $: displayRows = safePlayers.map((row) => ({
+    ...row,
+    displayName: formatName(row?.name ?? ''),
+    statValues: statCols.map((key) => formatStat(row, key))
+  }));
   $: totalsByKey = buildTotals(safePlayers);
   $: formattedLongest = Math.max(...displayRows.map((r) => r.displayName.length), 6);
   $: nameColWidth = `${Math.min(formattedLongest, 13)}ch`;
@@ -77,8 +81,8 @@
       </div>
       {#each displayRows as row, i}
         <div class="grid {i===5 ? 'border-t-2 border-white/20' : 'border-t border-white/5'}" style="width:max-content; grid-template-columns: repeat({statCols.length}, {statColWidth})">
-          {#each statCols as k}
-            <div class="py-1 text-center">{getStat(row, k)}</div>
+          {#each row.statValues as value}
+            <div class="py-1 text-center">{value ?? ''}</div>
           {/each}
         </div>
       {/each}

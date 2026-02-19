@@ -59,7 +59,7 @@ export interface BoxscoreResponse {
     home: Player[];
     away: Player[];
   };
-  names?: {
+  names?: string[] | {
     home?: string;
     away?: string;
   };

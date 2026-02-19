@@ -5,6 +5,8 @@ export interface TouchGestureOptions {
   onSwipeRight?: () => void;
   onSwipeUp?: () => void;
   onSwipeDown?: () => void;
+  onHorizontalDrag?: (deltaX: number) => void;
+  onGestureEnd?: (didSwipe: boolean) => void;
   threshold?: number;
   preventScroll?: boolean;
   target?: HTMLElement | Document;
@@ -14,6 +16,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
   let startX = 0;
   let startY = 0;
   let isScrolling = false;
+  let ignoreGesture = false;
   
   const threshold = options.threshold || 50;
   const target = options.target || (typeof document !== 'undefined' ? document : null);
@@ -29,6 +32,8 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     isScrolling = false;
 
     const targetEl = event.target as HTMLElement;
+    ignoreGesture = !!targetEl?.closest?.('[data-no-swipe="true"]');
+    if (ignoreGesture) return;
     
     const isSwipeArea = !!(targetEl as any)?.closest?.('.swipe-area') || 
                         document.body.classList.contains('swipe-area') ||
@@ -43,20 +48,41 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
       isScrolling = true;
     }
   }
+
+  function handleTouchMove(event: TouchEvent) {
+    if (ignoreGesture) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+
+    const deltaX = touch.clientX - startX;
+    const deltaY = touch.clientY - startY;
+    if (!isScrolling && Math.abs(deltaX) > Math.abs(deltaY)) {
+      options.onHorizontalDrag?.(deltaX);
+    }
+  }
   
   function handleTouchEnd(event: TouchEvent) {
+    if (ignoreGesture) {
+      ignoreGesture = false;
+      options.onGestureEnd?.(false);
+      return;
+    }
+
     const touch = event.changedTouches?.[0];
     if (!touch) return;
     
     const deltaX = touch.clientX - startX;
     const deltaY = touch.clientY - startY;
     
+    let didSwipe = false;
     if (Math.abs(deltaX) > threshold && Math.abs(deltaY) < 100) {
       if (!isScrolling) {
         if (deltaX > 0 && options.onSwipeRight) {
           options.onSwipeRight();
+          didSwipe = true;
         } else if (deltaX < 0 && options.onSwipeLeft) {
           options.onSwipeLeft();
+          didSwipe = true;
         }
       }
     }
@@ -72,16 +98,19 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     startX = 0;
     startY = 0;
     isScrolling = false;
+    options.onGestureEnd?.(didSwipe);
   }
   
   // Attach immediately to avoid lifecycle race conditions
   if (typeof window !== 'undefined') {
     target.addEventListener('touchstart', handleTouchStart as any, { capture: true, passive: true });
+    target.addEventListener('touchmove', handleTouchMove as any, { capture: true, passive: true });
     target.addEventListener('touchend', handleTouchEnd as any, { capture: true, passive: true });
   }
   
   const cleanup = () => {
     target.removeEventListener('touchstart', handleTouchStart as any, { capture: true } as any);
+    target.removeEventListener('touchmove', handleTouchMove as any, { capture: true } as any);
     target.removeEventListener('touchend', handleTouchEnd as any, { capture: true } as any);
   };
 

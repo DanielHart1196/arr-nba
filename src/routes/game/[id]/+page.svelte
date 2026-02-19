@@ -11,6 +11,7 @@
   let payload: BoxscoreResponse | null = null;
   let interval: any;
   let redditInterval: any;
+  let handledStreamedPayload: Promise<BoxscoreResponse> | undefined;
   
   async function refresh() {
     try {
@@ -23,11 +24,17 @@
 
   // Handle streamed data
   $: if (data.streamed?.payload) {
-    data.streamed.payload.then((res: any) => {
+    const streamedPayload = data.streamed.payload;
+    if (streamedPayload === handledStreamedPayload) {
+      // no-op: prevent duplicate .then handlers on same streamed promise
+    } else {
+      handledStreamedPayload = streamedPayload;
+      streamedPayload.then((res: BoxscoreResponse) => {
       if (!payload) payload = res;
-    }).catch((err: any) => {
-      console.error('Failed to load streamed payload:', err);
-    });
+      }).catch((err: unknown) => {
+        console.error('Failed to load streamed payload:', err);
+      });
+    }
   }
   
   async function refreshRedditData() {
@@ -77,7 +84,7 @@
 </script>
 
 <div class="p-4">
-  <button class="text-white/70 hover:text-white" on:click={() => history.back()}>← Back</button>
+  <button class="text-white/70 hover:text-white" on:click={() => history.back()}>Back</button>
   <div class="mt-2 mb-2 min-h-[60px] swipe-area">
     {#if payload?.linescores}
       <div class="flex items-center justify-between text-lg font-semibold">
@@ -126,3 +133,4 @@
     </div>
   {/if}
 </div>
+

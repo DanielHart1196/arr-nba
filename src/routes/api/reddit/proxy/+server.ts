@@ -1,4 +1,5 @@
 import { error, json } from '@sveltejs/kit';
+import type { RequestHandler } from '@sveltejs/kit';
 
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -13,7 +14,7 @@ const BROWSER_HEADERS = {
   'Referer': 'https://www.reddit.com/',
 };
 
-export const GET = async ({ url }) => {
+export const GET: RequestHandler = async ({ url }) => {
   const targetUrl = url.searchParams.get('url');
   
   if (!targetUrl) {
