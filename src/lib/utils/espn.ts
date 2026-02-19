@@ -103,6 +103,15 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
 export function parseLinescores(summary: any, scoreboardFallback?: any) {
   const comp = summary?.boxscore?.teams ?? [];
   const lines: Record<'home' | 'away', { team: any; periods: number[]; total: number }> = { home: { team: {}, periods: [], total: 0 }, away: { team: {}, periods: [], total: 0 } };
+  const toNum = (v: any): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const toPeriods = (arr: any[]) =>
+    (arr ?? [])
+      .map((x: any) => toNum(x?.value ?? x?.displayValue ?? x?.score ?? x))
+      .filter((n: number) => Number.isFinite(n));
+
   for (const t of comp) {
     let side: 'home' | 'away' = t?.team?.homeAway === 'home' ? 'home' : 'away';
     
@@ -111,18 +120,22 @@ export function parseLinescores(summary: any, scoreboardFallback?: any) {
       side = side === 'home' ? 'away' : 'home';
     }
 
-    const ls = t?.linescores ?? [];
-    const periods: number[] = ls.map((p: any) => Number(p?.value ?? 0));
-    const total = Number(t?.score ?? 0);
+    const periods: number[] = toPeriods(t?.linescores ?? []);
+    const total = toNum(t?.score ?? t?.points ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0);
     lines[side] = { team: t?.team, periods, total };
   }
-  if ((!lines.home.periods?.length || !lines.away.periods?.length) && scoreboardFallback) {
-    const compFb = scoreboardFallback?.competitions?.[0];
+  if (!lines.home.periods?.length || !lines.away.periods?.length) {
+    const compFb = scoreboardFallback?.competitions?.[0] ?? summary?.header?.competitions?.[0];
     const awayTeam = compFb?.competitors?.find((c: any) => c.homeAway === 'away');
     const homeTeam = compFb?.competitors?.find((c: any) => c.homeAway === 'home');
-    const toPeriods = (arr: any[]) => (arr ?? []).map((x: any) => Number(x?.value ?? 0));
-    if (awayTeam) lines.away = { team: awayTeam.team, periods: toPeriods(awayTeam?.linescores ?? []), total: Number(awayTeam.score ?? 0) };
-    if (homeTeam) lines.home = { team: homeTeam.team, periods: toPeriods(homeTeam?.linescores ?? []), total: Number(homeTeam.score ?? 0) };
+    if (awayTeam) {
+      const periods = toPeriods(awayTeam?.linescores ?? []);
+      lines.away = { team: awayTeam.team, periods, total: toNum(awayTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
+    }
+    if (homeTeam) {
+      const periods = toPeriods(homeTeam?.linescores ?? []);
+      lines.home = { team: homeTeam.team, periods, total: toNum(homeTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
+    }
   }
   return lines;
 }

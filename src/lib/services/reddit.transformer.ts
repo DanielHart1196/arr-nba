@@ -1,7 +1,14 @@
 import type { RedditPost, RedditComment, RedditThreadMapping } from '$lib/types/nba';
+import { normalizeMascot } from '$lib/utils/reddit.utils';
 
 export class RedditTransformer {
-  transformSearch(json: any, type: 'live' | 'post'): { post?: RedditPost } {
+  transformSearch(
+    json: any,
+    type: 'live' | 'post',
+    eventDate?: string,
+    awayCandidates: string[] = [],
+    homeCandidates: string[] = []
+  ): { post?: RedditPost } {
     const items = json?.data?.children ?? [];
     const now = Date.now() / 1000;
     
@@ -9,9 +16,50 @@ export class RedditTransformer {
     // For LIVE threads, must be within last 24 hours.
     // For POST threads, must be within last 36 hours.
     const maxAge = type === 'post' ? 36 * 3600 : 24 * 3600;
-    const fresh = items.filter((i: any) => (now - (i?.data?.created_utc ?? now)) <= maxAge);
+    const targetTs = eventDate ? Math.floor(new Date(eventDate).getTime() / 1000) : NaN;
+    const useHistoricRanking = Number.isFinite(targetTs);
+    const inWindow = (createdUtc: number): boolean => {
+      if (!useHistoricRanking) {
+        // If we do not have game date context, do not hard-expire PGT candidates.
+        if (type === 'post') return true;
+        return (now - createdUtc) <= maxAge;
+      }
+      const target = targetTs as number;
+      if (type === 'live') {
+        // Game threads are often posted hours before tipoff.
+        return createdUtc >= target - (12 * 3600) && createdUtc <= target + (18 * 3600);
+      }
+      // For PGT, rely on search relevance + title matching instead of hard time window.
+      return true;
+    };
+    const fresh = items.filter((i: any) => inWindow(i?.data?.created_utc ?? 0));
+
+    const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const expandCandidates = (candidates: string[]): string[] => {
+      const out = new Set<string>();
+      for (const raw of candidates ?? []) {
+        const n = normalize(raw);
+        if (!n) continue;
+        out.add(n);
+        const parts = n.split(' ').filter(Boolean);
+        if (parts.length > 1) {
+          out.add(parts[parts.length - 1]); // mascot, e.g. "lakers"
+          out.add(parts.map((p) => p[0]).join('')); // abbreviation-ish, e.g. "lal"
+        }
+      }
+      return [...out];
+    };
+    const titleContainsAny = (title: string, candidates: string[]) => {
+      const t = normalize(title);
+      return (candidates ?? [])
+        .map((c) => normalize(c))
+        .filter(Boolean)
+        .some((needle) => t.includes(needle));
+    };
+    const awayTerms = expandCandidates(awayCandidates);
+    const homeTerms = expandCandidates(homeCandidates);
     
-    const filtered = fresh.filter((i: any) => {
+    const modeFiltered = fresh.filter((i: any) => {
       const title = (i?.data?.title || '').toLowerCase();
       const isPGT = title.includes('post game thread') || title.includes('post-game thread') || title.includes('postgame thread');
       
@@ -21,9 +69,26 @@ export class RedditTransformer {
         return title.includes('game thread') && !isPGT;
       }
     });
+    const strictFiltered = modeFiltered.filter((i: any) => {
+      const title = (i?.data?.title || '').toLowerCase();
+      const hasAway = titleContainsAny(title, awayTerms);
+      const hasHome = titleContainsAny(title, homeTerms);
+      return hasAway && hasHome;
+    });
+    const filtered = strictFiltered.length > 0 ? strictFiltered : modeFiltered;
 
-    // Sort by creation time to get the ABSOLUTE LATEST one if there are multiple matches
-    const sorted = filtered.sort((a: any, b: any) => (b.data?.created_utc ?? 0) - (a.data?.created_utc ?? 0));
+    // For historical lookup, choose the closest thread date to the game date.
+    // Otherwise pick the latest fresh thread.
+    const sorted = filtered.sort((a: any, b: any) => {
+      const aTs = a?.data?.created_utc ?? 0;
+      const bTs = b?.data?.created_utc ?? 0;
+      if (useHistoricRanking) {
+        const aDist = Math.abs(aTs - (targetTs as number));
+        const bDist = Math.abs(bTs - (targetTs as number));
+        if (aDist !== bDist) return aDist - bDist;
+      }
+      return bTs - aTs;
+    });
 
     const mapped = sorted.map((i: any) => ({
       id: i?.data?.id,
@@ -60,12 +125,17 @@ export class RedditTransformer {
       if (!m) continue;
       const title = m[1];
       const url = m[2];
-      const isPGT = title.toLowerCase().includes('post game thread');
+      const lower = title.toLowerCase();
+      const isPGT =
+        lower.includes('post game thread') ||
+        lower.includes('post-game thread') ||
+        lower.includes('postgame thread');
       const parts = title.split(':')[1]?.trim() ?? title;
-      const [awayPart, homePart] = parts.split(' at ').map(s => s?.trim());
+      const splitToken = /\s+at\s+/i.test(parts) ? /\s+at\s+/i : (/\s+vs\.?\s+/i.test(parts) ? /\s+vs\.?\s+/i : null);
+      const [awayPart, homePart] = splitToken ? parts.split(splitToken).map((s) => s?.trim()) : [undefined, undefined];
       if (!awayPart || !homePart) continue;
       
-      const key = [this.mascotName(awayPart), this.mascotName(homePart)].sort().join('|');
+      const key = [normalizeMascot(awayPart), normalizeMascot(homePart)].sort().join('|');
       const idMatch = /comments\/([a-z0-9]+)\//.exec(url);
       const id = idMatch?.[1] ?? '';
 
@@ -79,9 +149,10 @@ export class RedditTransformer {
       const post: RedditPost = { id, title, url };
       
       if (isPGT) {
-        mapping[key].pgt = post;
+        // Keep first parsed PGT for stability.
+        if (!mapping[key].pgt) mapping[key].pgt = post;
       } else {
-        mapping[key].gdt = post;
+        if (!mapping[key].gdt) mapping[key].gdt = post;
       }
     }
     
@@ -99,26 +170,6 @@ export class RedditTransformer {
     }
     
     return { mapping };
-  }
-
-  private mascotName(name: string): string {
-    const n = (name || '').toLowerCase();
-    const mascots = [
-      'trail blazers', 'knicks', '76ers', 'lakers', 'celtics', 'warriors', 'nets',
-      'raptors', 'bulls', 'cavaliers', 'pistons', 'pacers', 'bucks', 'heat',
-      'magic', 'hawks', 'hornets', 'wizards', 'mavericks', 'rockets', 'grizzlies',
-      'pelicans', 'spurs', 'nuggets', 'timberwolves', 'suns', 'kings', 'clippers',
-      'thunder', 'jazz', 'blazers'
-    ];
-    
-    for (const m of mascots) {
-      if (n.includes(m)) {
-        if (m === 'blazers' || m === 'trail blazers') return 'Trail Blazers';
-        // Return capitalized version
-        return m.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-      }
-    }
-    return name;
   }
 
   private toTree(json: any, depth = 0): RedditComment[] {

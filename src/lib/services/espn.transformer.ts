@@ -19,6 +19,7 @@ export class ESPNBasketTransformer implements INBATransformer {
 
     return {
       id: summary?.id || event?.id || '',
+      eventDate: event?.date || summary?.header?.competitions?.[0]?.date || '',
       boxscore: summary?.boxscore ?? {},
       players,
       linescores,

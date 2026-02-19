@@ -5,59 +5,107 @@
   import LinescoreTable from './stats/LinescoreTable.svelte';
   import type { Player, Team } from '../types/nba';
   
-  export let eventId: string;
   export let players: { home: Player[]; away: Player[] };
   export let linescores: { home: { team: Team; periods: number[]; total: number }; away: { team: Team; periods: number[]; total: number } };
 
-  let side: 'home' | 'away' = 'away';
-  let mode: 'STATS' | 'LIVE' | 'POST' = 'STATS';
+  const MODE_ORDER = ['LIVE', 'STATS', 'POST'] as const;
+  type ViewMode = (typeof MODE_ORDER)[number];
 
-  onMount(() => {
-    try {
-      const savedSide = localStorage.getItem(`arrnba.lastSide.${eventId}`);
-      if (savedSide === 'home' || savedSide === 'away') {
-        side = savedSide;
-      }
-      const savedMode = localStorage.getItem(`arrnba.viewMode.${eventId}`);
-      if (savedMode === 'STATS' || savedMode === 'LIVE' || savedMode === 'POST') {
-        mode = savedMode;
-      }
-    } catch {}
-  });
+  let side: 'home' | 'away' = 'away';
+  let mode: ViewMode = 'STATS';
+  let currentIndex = 1;
+  let panelWidth = 0;
+  let dragOffsetPx = 0;
+  let isDragging = false;
+  let trackAnimating = false;
+  let suppressInitialTrackAnimation = true;
+  let modeContainer: HTMLElement;
+
+  function clampIndex(i: number): number {
+    return Math.max(0, Math.min(MODE_ORDER.length - 1, i));
+  }
+
+  function indexOfMode(v: ViewMode): number {
+    return MODE_ORDER.indexOf(v);
+  }
+
+  function applyIndex(index: number): void {
+    const safe = clampIndex(index);
+    currentIndex = safe;
+    mode = MODE_ORDER[safe];
+  }
 
   function setSide(v: 'home' | 'away') {
     if (side === v) return;
     side = v;
-    try {
-      localStorage.setItem(`arrnba.lastSide.${eventId}`, v);
-    } catch {}
   }
   
-  function setMode(v: 'STATS' | 'LIVE' | 'POST') {
+  function setMode(v: ViewMode) {
     if (mode === v) return;
-    mode = v;
-    try {
-      localStorage.setItem(`arrnba.viewMode.${eventId}`, v);
-    } catch {}
+    applyIndex(indexOfMode(v));
   }
 
-  function cycleMode(direction: 'left' | 'right') {
-    if (direction === 'right') {
-      if (mode === 'STATS') setMode('LIVE');
-      else if (mode === 'LIVE') setMode('POST');
-      else setMode('STATS');
+  function snapToIndex(index: number): void {
+    if (trackAnimating) return;
+    const next = clampIndex(index);
+    if (next === currentIndex) {
+      isDragging = false;
+      dragOffsetPx = 0;
       return;
     }
-
-    if (mode === 'STATS') setMode('POST');
-    else if (mode === 'POST') setMode('LIVE');
-    else setMode('STATS');
+    trackAnimating = true;
+    isDragging = false;
+    applyIndex(next);
+    dragOffsetPx = 0;
+    setTimeout(() => {
+      trackAnimating = false;
+    }, 180);
   }
 
-  createTouchGestures({
-    onSwipeRight: () => cycleMode('right'),
-    onSwipeLeft: () => cycleMode('left'),
-    threshold: 50
+  function handleSwipeDrag(deltaX: number): void {
+    if (trackAnimating) return;
+    const width = Math.max(panelWidth, 280);
+    const clamped = Math.max(-width * 0.85, Math.min(width * 0.85, deltaX));
+    isDragging = true;
+    dragOffsetPx = clamped;
+  }
+
+  function handleGestureEnd(didSwipe: boolean): void {
+    if (trackAnimating) return;
+    if (didSwipe) return;
+    const width = Math.max(panelWidth, 280);
+    const threshold = width * 0.28;
+    if (dragOffsetPx <= -threshold) {
+      snapToIndex(currentIndex + 1);
+      return;
+    }
+    if (dragOffsetPx >= threshold) {
+      snapToIndex(currentIndex - 1);
+      return;
+    }
+    isDragging = false;
+    dragOffsetPx = 0;
+  }
+
+  onMount(() => {
+    const gestures = createTouchGestures({
+      target: modeContainer,
+      onSwipeRight: () => snapToIndex(currentIndex - 1),
+      onSwipeLeft: () => snapToIndex(currentIndex + 1),
+      onHorizontalDrag: handleSwipeDrag,
+      onGestureEnd: handleGestureEnd,
+      threshold: 50
+    });
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        suppressInitialTrackAnimation = false;
+      });
+    });
+
+    return () => {
+      gestures.destroy();
+    };
   });
 
   function abbr(team: Team) {
@@ -69,7 +117,7 @@
   $: homeAb = (linescores?.home?.team ? abbr(linescores.home.team) : '');
 </script>
 
-<div>
+<div bind:this={modeContainer} class="swipe-area" style="touch-action: pan-y;">
 <div class="grid grid-cols-3 gap-2 mb-2 swipe-area">
   <div class="text-center">
     <button class="w-full py-2 font-semibold {mode==='LIVE' ? 'text-white' : 'text-white/70'}" on:click={() => setMode('LIVE')}>LIVE</button>
@@ -85,21 +133,31 @@
   </div>
 </div>
 
-{#if mode === 'STATS' && linescores}
-  <LinescoreTable {linescores} />
-{/if}
-
-{#if mode === 'STATS' && linescores}
-  <div class="grid grid-cols-2 gap-2 mb-2 swipe-area">
-    <button class="w-full py-2 rounded font-semibold {side==='away' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => setSide('away')}>{awayAb}</button>
-    <button class="w-full py-2 rounded font-semibold {side==='home' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => setSide('home')}>{homeAb}</button>
+<div class="relative overflow-hidden" bind:clientWidth={panelWidth}>
+  <div
+    class="flex"
+    style="width: {(panelWidth || 1) * MODE_ORDER.length}px; transform: translate3d({(-currentIndex * (panelWidth || 1)) + dragOffsetPx}px, 0, 0); transition: {(isDragging || suppressInitialTrackAnimation) ? 'none' : 'transform 180ms ease-out'};"
+  >
+    {#each MODE_ORDER as paneMode, i}
+      <div class="shrink-0 min-w-0" style="width: {panelWidth || 1}px;">
+        {#if paneMode === 'STATS'}
+          {#if linescores}
+            <LinescoreTable {linescores} />
+            <div class="grid grid-cols-2 gap-2 mb-2 swipe-area">
+              <button class="w-full py-2 rounded font-semibold {side==='away' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => setSide('away')}>{awayAb}</button>
+              <button class="w-full py-2 rounded font-semibold {side==='home' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => setSide('home')}>{homeAb}</button>
+            </div>
+          {/if}
+          {#if players}
+            <StatsTable players={roster} />
+          {/if}
+        {:else}
+          <div class="swipe-area min-w-0 overflow-x-hidden">
+            <slot name="reddit" mode={paneMode} {side}></slot>
+          </div>
+        {/if}
+      </div>
+    {/each}
   </div>
-{/if}
-
-{#if mode === 'STATS' && players}
-  <StatsTable players={roster} />
-{/if}
-<div class="{mode==='STATS' ? 'hidden' : ''} swipe-area">
-  <slot name="reddit" {mode} {side}></slot>
 </div>
 </div>

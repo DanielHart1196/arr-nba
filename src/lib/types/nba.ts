@@ -54,6 +54,7 @@ export interface Player {
 
 export interface BoxscoreResponse {
   id: string;
+  eventDate?: string;
   boxscore?: any;
   players: {
     home: Player[];
@@ -114,6 +115,8 @@ export interface RedditSearchRequest {
   type: 'live' | 'post';
   awayCandidates: string[];
   homeCandidates: string[];
+  eventDate?: string;
+  eventId?: string;
 }
 
 export interface RedditSearchResponse {

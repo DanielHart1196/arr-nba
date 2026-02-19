@@ -1,9 +1,21 @@
 import type { RedditComment } from '../types/nba';
 
 export function normalizeMascot(name: string): string {
-  const s = (name || '').toLowerCase();
-  if (s.includes('trail blazers')) return 'Trail Blazers';
-  return name;
+  const s = (name || '').toLowerCase().trim();
+  const mascots = [
+    'trail blazers', 'knicks', '76ers', 'lakers', 'celtics', 'warriors', 'nets',
+    'raptors', 'bulls', 'cavaliers', 'pistons', 'pacers', 'bucks', 'heat',
+    'magic', 'hawks', 'hornets', 'wizards', 'mavericks', 'rockets', 'grizzlies',
+    'pelicans', 'spurs', 'nuggets', 'timberwolves', 'suns', 'kings', 'clippers',
+    'thunder', 'jazz', 'blazers'
+  ];
+  for (const m of mascots) {
+    if (s.includes(m)) {
+      if (m === 'blazers' || m === 'trail blazers') return 'Trail Blazers';
+      return m.split(' ').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+    }
+  }
+  return (name || '').trim();
 }
 
 export function createPairKey(awayName: string, homeName: string): string {

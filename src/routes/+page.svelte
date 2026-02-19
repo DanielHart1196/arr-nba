@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
   import { nbaService } from '../lib/services/nba.service';
   import { prewarmRedditForMatch } from '../lib/services/reddit-prewarm.service';
   import { getTeamLogoAbbr } from '../lib/utils/team.utils';
   import { addDays, getEventTeamDisplayNames, isEventOnDate, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
   import { createTouchGestures } from '../lib/composables/touch-gestures';
   import type { Event as NBAEvent } from '../lib/types/nba';
-  
+
   type GameCardView = {
     id: string;
     event: NBAEvent;
@@ -21,23 +22,170 @@
   };
 
   export let data: { events: NBAEvent[] };
-  let events = data.events ?? [];
-  let prevEvents: NBAEvent[] = [];
-  let nextEvents: NBAEvent[] = [];
+
+  const DAY_RANGE_PAST = 180;
+  const DAY_RANGE_FUTURE = 140;
+  const TOTAL_DAYS = DAY_RANGE_PAST + DAY_RANGE_FUTURE + 1;
+  const START_INDEX = DAY_RANGE_PAST;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const SNAP_THRESHOLD_RATIO = 0.28;
+  const SWIPE_ANIM_MS = 120;
+
+  const SCHEDULE_PREFETCH_KEY = 'arrnba.schedulePrefetch.v2';
+  const PREFETCH_PAST_DAYS = DAY_RANGE_PAST;
+  const PREFETCH_FUTURE_DAYS = DAY_RANGE_FUTURE;
+
+  const baseDate = new Date();
+  baseDate.setHours(0, 0, 0, 0);
+
+  const dayOffsets = Array.from({ length: TOTAL_DAYS }, (_, i) => i - START_INDEX);
+  const SAVED_DATE_KEY = 'arrnba.selectedDateKey';
+  const LAST_DAY_EVENTS_KEY = 'arrnba.lastDayEvents.v1';
+
+  function getInitialIndexFromSession(): number {
+    if (typeof window === 'undefined') return START_INDEX;
+    try {
+      const raw = sessionStorage.getItem(SAVED_DATE_KEY);
+      if (!raw) return START_INDEX;
+      const parsed = parseLocalDateKey(raw);
+      if (!parsed) return START_INDEX;
+      return clampIndex(START_INDEX + dayDiffFromBase(parsed));
+    } catch {
+      return START_INDEX;
+    }
+  }
+
+  const initialIndex = getInitialIndexFromSession();
+  let currentIndex = initialIndex;
+  let selectedDate = getDateForIndex(initialIndex);
+  let cardsViewportWidth = 0;
+  let dragOffsetPx = 0;
+  let isDragging = false;
+  let trackAnimating = false;
+  let trackAnimationTimer: ReturnType<typeof setTimeout> | null = null;
+  let suppressInitialTrackAnimation = true;
+  let suppressTrackTransition = false;
+  let hideScores = false;
   let interval: any;
-  let refreshInFlight = false;
-  let selectedDate = new Date();
-  let gameCards: GameCardView[] = [];
-  let prevCards: GameCardView[] = [];
-  let nextCards: GameCardView[] = [];
+  let prewarmTimeout: any;
+  let lastNavAt = 0;
+  let lastToggleAt = 0;
+  let lastOpenAt = 0;
+  let datePickerInput: HTMLInputElement | null = null;
+  let dayIndexLinkByIndex: Record<number, string | null> = {};
+  let dayIndexLoading = new Set<number>();
+
+  function getInitialEventsFromSession(index: number): NBAEvent[] | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = sessionStorage.getItem(LAST_DAY_EVENTS_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { index?: number; dateKey?: string; events?: NBAEvent[] };
+      if (parsed.index !== index) return null;
+      if (!Array.isArray(parsed.events)) return null;
+      const expectedDateKey = toLocalDateKey(getDateForIndex(index));
+      if (parsed.dateKey !== expectedDateKey) return null;
+      return parsed.events;
+    } catch {
+      return null;
+    }
+  }
+
+  function readCachedScoreboardEvents(date: Date): NBAEvent[] | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const key = `arrnba:scoreboard:${toScoreboardDateKey(date)}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { data?: { events?: NBAEvent[] } };
+      return Array.isArray(parsed?.data?.events) ? parsed.data.events : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getMergedCachedEventsForDate(date: Date): NBAEvent[] | null {
+    const targetDateStr = date.toDateString();
+    const fromPrev = readCachedScoreboardEvents(addDays(date, -1)) ?? [];
+    const fromCurrent = readCachedScoreboardEvents(date) ?? [];
+    const fromNext = readCachedScoreboardEvents(addDays(date, 1)) ?? [];
+    if (fromPrev.length === 0 && fromCurrent.length === 0 && fromNext.length === 0) return null;
+    return mergeUniqueAndSortEvents(
+      [...fromPrev, ...fromCurrent, ...fromNext].filter((event) => isEventOnDate(event, targetDateStr))
+    );
+  }
+
+  function hydrateAllDaysFromBrowserCache(seed: Record<number, NBAEvent[]>): Record<number, NBAEvent[]> {
+    if (typeof window === 'undefined') return seed;
+    const next: Record<number, NBAEvent[]> = { ...seed };
+    for (let i = 0; i < TOTAL_DAYS; i++) {
+      if (next[i]) continue;
+      const merged = getMergedCachedEventsForDate(getDateForIndex(i));
+      if (merged) next[i] = merged;
+    }
+    return next;
+  }
+
+  function saveDayEventsForIndex(index: number, events: NBAEvent[]) {
+    if (typeof window === 'undefined') return;
+    try {
+      sessionStorage.setItem(
+        LAST_DAY_EVENTS_KEY,
+        JSON.stringify({
+          index,
+          dateKey: toLocalDateKey(getDateForIndex(index)),
+          events
+        })
+      );
+    } catch {}
+  }
+
+  const restoredInitialEvents = getInitialEventsFromSession(initialIndex);
+  const initialSeedEvents: Record<number, NBAEvent[]> = restoredInitialEvents
+    ? { [initialIndex]: restoredInitialEvents }
+    : (initialIndex === START_INDEX ? { [initialIndex]: data.events ?? [] } : {});
+  let dayEvents: Record<number, NBAEvent[]> = hydrateAllDaysFromBrowserCache(initialSeedEvents);
+  let dayLoading = new Set<number>();
+
   const redditPrewarmed = new Set<string>();
   const boxscorePrewarmed = new Set<string>();
-  let cardsViewportWidth = 0;
-  let trackOffsetPx = 0;
-  let trackAnimating = false;
-  let swipeDirection: -1 | 0 | 1 = 0;
-  let isSwipeDragging = false;
-  let adjacentRequestSeq = 0;
+
+  function clampIndex(index: number): number {
+    return Math.max(0, Math.min(TOTAL_DAYS - 1, index));
+  }
+
+  function getDateForIndex(index: number): Date {
+    return addDays(baseDate, dayOffsets[index] ?? 0);
+  }
+
+  function setCurrentIndex(index: number): void {
+    currentIndex = clampIndex(index);
+    selectedDate = getDateForIndex(currentIndex);
+  }
+
+  function toLocalDateKey(date: Date): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function parseLocalDateKey(key: string): Date | null {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    const out = new Date(y, mo, d);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+
+  function dayDiffFromBase(date: Date): number {
+    const a = Date.UTC(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+    const b = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+    return Math.round((b - a) / DAY_MS);
+  }
 
   function hasSameEventOrder(a: NBAEvent[], b: NBAEvent[]) {
     if (a.length !== b.length) return false;
@@ -45,73 +193,6 @@
       if (a[i]?.id !== b[i]?.id) return false;
     }
     return true;
-  }
-
-  async function refresh() {
-    if (refreshInFlight) return;
-    refreshInFlight = true;
-
-    try {
-      const targetDateStr = selectedDate.toDateString();
-      
-      // Save date to sessionStorage so it's remembered when coming back
-      try {
-        sessionStorage.setItem('arrnba.selectedDate', selectedDate.toISOString());
-      } catch (e) {}
-      
-      // Calculate the three US days we need to check to cover our local day
-      const currentDay = new Date(selectedDate);
-      const prevDay = addDays(selectedDate, -1);
-      const nextDay = addDays(selectedDate, 1);
-      const isOnTargetDay = (event: NBAEvent) => isEventOnDate(event, targetDateStr);
-
-      // 1. Check if we already have the main day in cache to avoid layout flicker
-      const cached = await nbaService.getScoreboard(toScoreboardDateKey(currentDay));
-      if (cached && cached.events) {
-        const cachedMatches = (cached.events ?? []).filter(isOnTargetDay);
-        // If we have any data cached for today, show it immediately while background fetch completes the 3-day window
-        if (cachedMatches.length > 0 && !hasSameEventOrder(events, cachedMatches)) {
-          events = cachedMatches;
-        }
-      }
-
-      // 2. Fetch all three days in parallel for maximum speed
-      const [response, prevResponse, nextResponse] = await Promise.all([
-        nbaService.getScoreboard(toScoreboardDateKey(currentDay)),
-        nbaService.getScoreboard(toScoreboardDateKey(prevDay)),
-        nbaService.getScoreboard(toScoreboardDateKey(nextDay))
-      ]);
-      
-      const fromCurrent = (response.events ?? []).filter(isOnTargetDay);
-      const fromPrev = (prevResponse.events ?? []).filter(isOnTargetDay);
-      const fromNext = (nextResponse.events ?? []).filter(isOnTargetDay);
-
-      // Combine and deduplicate
-      const allMatches = [...fromPrev, ...fromCurrent, ...fromNext];
-      const merged = mergeUniqueAndSortEvents(allMatches);
-      if (!hasSameEventOrder(events, merged)) {
-        events = merged;
-      }
-      prewarmBoxscores(events);
-      
-      // Pre-warm the adjacent days in the background to make next swipes instant
-      const dayAfter = addDays(selectedDate, 2); // We already fetched selectedDate + 1
-      const dayBefore = addDays(selectedDate, -2); // We already fetched selectedDate - 1
-      
-      nbaService.getScoreboard(toScoreboardDateKey(dayAfter)).catch(() => {});
-      nbaService.getScoreboard(toScoreboardDateKey(dayBefore)).catch(() => {});
-      preloadAdjacentDays(currentDay).catch(() => {});
-
-    } catch (error) {
-      console.error('Failed to refresh scoreboard:', error);
-    } finally {
-      refreshInFlight = false;
-    }
-  }
-
-  function changeDate(delta: number) {
-    if (delta === 1) commitSwipe(1);
-    else if (delta === -1) commitSwipe(-1);
   }
 
   async function fetchMergedEventsForDate(date: Date): Promise<NBAEvent[]> {
@@ -132,101 +213,224 @@
     return mergeUniqueAndSortEvents([...fromPrev, ...fromCurrent, ...fromNext]);
   }
 
-  async function preloadAdjacentDays(baseDate: Date) {
-    const req = ++adjacentRequestSeq;
-    const prevDate = addDays(baseDate, -1);
-    const nextDate = addDays(baseDate, 1);
+  async function loadDay(index: number, force = false): Promise<void> {
+    const safeIndex = clampIndex(index);
+    if (dayLoading.has(safeIndex)) return;
+    if (!force && dayEvents[safeIndex]) return;
 
+    dayLoading.add(safeIndex);
+    dayLoading = new Set(dayLoading);
     try {
-      const [prevMerged, nextMerged] = await Promise.all([
-        fetchMergedEventsForDate(prevDate),
-        fetchMergedEventsForDate(nextDate)
-      ]);
-      if (req !== adjacentRequestSeq) return;
+      const date = getDateForIndex(safeIndex);
+      const merged = await fetchMergedEventsForDate(date);
+      dayEvents[safeIndex] = merged;
+      saveDayEventsForIndex(safeIndex, merged);
 
-      prevEvents = prevMerged;
-      nextEvents = nextMerged;
-      prevCards = prevMerged.map((event) => toGameCard(event, hideScores));
-      nextCards = nextMerged.map((event) => toGameCard(event, hideScores));
+      if (safeIndex === currentIndex) {
+        prewarmBoxscores(merged);
+        prewarmActiveGames(merged);
+      }
     } catch (error) {
-      if (req !== adjacentRequestSeq) return;
-      console.error('Failed to preload adjacent swipe days:', error);
+      console.error(`Failed to load day index ${safeIndex}:`, error);
+    } finally {
+      dayLoading.delete(safeIndex);
+      dayLoading = new Set(dayLoading);
     }
+  }
+
+  function prefetchAround(index: number) {
+    loadDay(index).catch(() => {});
+    loadDay(index - 1).catch(() => {});
+    loadDay(index + 1).catch(() => {});
+    loadDailyIndexLink(index).catch(() => {});
+    loadDailyIndexLink(index - 1).catch(() => {});
+    loadDailyIndexLink(index + 1).catch(() => {});
+  }
+
+  function buildPrefetchDateKeys(anchor: Date) {
+    const keys: string[] = [];
+    for (let i = -PREFETCH_PAST_DAYS; i <= PREFETCH_FUTURE_DAYS; i++) {
+      keys.push(toScoreboardDateKey(addDays(anchor, i)));
+    }
+    return keys;
+  }
+
+  async function prefetchScheduleWindow() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      if (localStorage.getItem(SCHEDULE_PREFETCH_KEY) === '1') return;
+      const keys = buildPrefetchDateKeys(selectedDate);
+      await nbaService.prewarmScoreboards(keys);
+      localStorage.setItem(SCHEDULE_PREFETCH_KEY, '1');
+    } catch (error) {
+      console.warn('Failed to prefetch schedule window:', error);
+    }
+  }
+
+  function saveSelectedDateForIndex(index: number) {
+    try {
+      const date = getDateForIndex(index);
+      sessionStorage.setItem(SAVED_DATE_KEY, toLocalDateKey(date));
+    } catch {}
+  }
+
+  function snapToIndex(index: number) {
+    const nextIndex = clampIndex(index);
+    if (nextIndex === currentIndex) {
+      isDragging = false;
+      dragOffsetPx = 0;
+      return;
+    }
+
+    // Allow new navigation to interrupt the previous animation window.
+    if (trackAnimationTimer) {
+      clearTimeout(trackAnimationTimer);
+      trackAnimationTimer = null;
+    }
+
+    trackAnimating = true;
+    isDragging = false;
+    setCurrentIndex(nextIndex);
+    dragOffsetPx = 0;
+    saveSelectedDateForIndex(nextIndex);
+    if (dayEvents[nextIndex]) {
+      saveDayEventsForIndex(nextIndex, dayEvents[nextIndex]);
+    }
+    prefetchAround(nextIndex);
+
+    trackAnimationTimer = setTimeout(() => {
+      trackAnimating = false;
+      trackAnimationTimer = null;
+    }, SWIPE_ANIM_MS);
+  }
+
+  function changeDate(delta: number) {
+    if (delta !== 1 && delta !== -1) return;
+    snapToIndex(currentIndex + delta);
+  }
+
+  function cancelTrackAnimationForTap() {
+    if (!trackAnimating) return;
+    if (trackAnimationTimer) {
+      clearTimeout(trackAnimationTimer);
+      trackAnimationTimer = null;
+    }
+    trackAnimating = false;
+    suppressTrackTransition = true;
+    dragOffsetPx = 0;
+    requestAnimationFrame(() => {
+      suppressTrackTransition = false;
+    });
+  }
+
+  function requestDateDelta(delta: number) {
+    const now = Date.now();
+    // Avoid duplicate click+pointer/touch firing for one gesture.
+    if (now - lastNavAt < 90) return;
+    lastNavAt = now;
+    changeDate(delta);
+  }
+
+  function openDatePicker() {
+    const input = datePickerInput;
+    if (!input) return;
+    const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
+    if (pickerInput.showPicker) {
+      pickerInput.showPicker();
+      return;
+    }
+    input.click();
+  }
+
+  function handleDatePicked(value: string) {
+    const picked = parseLocalDateKey(value);
+    if (!picked) return;
+    const nextIndex = clampIndex(START_INDEX + dayDiffFromBase(picked));
+    snapToIndex(nextIndex);
+  }
+
+  function interactionLocked(): boolean {
+    return trackAnimating || isDragging || Math.abs(dragOffsetPx) > 4;
+  }
+
+  function requestToggleHide() {
+    if (interactionLocked()) return;
+    const now = Date.now();
+    if (now - lastToggleAt < 90) return;
+    lastToggleAt = now;
+    toggleHide();
+  }
+
+  function openGame(gameId: string) {
+    if (interactionLocked()) return;
+    const now = Date.now();
+    if (now - lastOpenAt < 120) return;
+    lastOpenAt = now;
+    goto(`/game/${gameId}`);
   }
 
   function handleSwipeDrag(deltaX: number) {
     if (trackAnimating) return;
     const width = Math.max(cardsViewportWidth, 320);
     const clamped = Math.max(-width * 0.9, Math.min(width * 0.9, deltaX));
-    swipeDirection = clamped < 0 ? 1 : -1;
-    isSwipeDragging = true;
-    trackOffsetPx = clamped;
+    isDragging = true;
+    dragOffsetPx = clamped;
   }
 
-  function resetSwipePreview() {
+  function handleGestureEnd(didSwipe: boolean) {
     if (trackAnimating) return;
-    isSwipeDragging = false;
-    trackOffsetPx = 0;
-    swipeDirection = 0;
-  }
+    if (didSwipe) return;
 
-  function finalizeSwipeState() {
-    trackAnimating = false;
-    isSwipeDragging = false;
-    trackOffsetPx = 0;
-    swipeDirection = 0;
-  }
-
-  function commitSwipe(direction: -1 | 1) {
-    if (trackAnimating) return;
     const width = Math.max(cardsViewportWidth, 320);
-    trackAnimating = true;
-    isSwipeDragging = false;
-    swipeDirection = direction;
-    trackOffsetPx = direction === 1 ? -width : width;
+    const threshold = width * SNAP_THRESHOLD_RATIO;
+    if (dragOffsetPx <= -threshold) {
+      snapToIndex(currentIndex + 1);
+      return;
+    }
+    if (dragOffsetPx >= threshold) {
+      snapToIndex(currentIndex - 1);
+      return;
+    }
 
-    setTimeout(() => {
-      selectedDate = addDays(selectedDate, direction);
-      if (direction === 1) {
-        events = nextEvents;
-        gameCards = nextCards;
-      } else {
-        events = prevEvents;
-        gameCards = prevCards;
-      }
-      // Snap back to center with transitions disabled to avoid opposite-side flip.
-      isSwipeDragging = true;
-      trackOffsetPx = 0;
-      requestAnimationFrame(() => {
-        trackAnimating = false;
-        isSwipeDragging = false;
-        swipeDirection = 0;
-      });
-      preloadAdjacentDays(selectedDate).catch(() => {});
-      refresh().catch(() => {});
-    }, 180);
+    isDragging = false;
+    dragOffsetPx = 0;
   }
 
   function formatDateDisplay(date: Date) {
     return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
   }
-  
-  // Preload Reddit data when user hovers or taps on a game
-  let prewarmTimeout: any;
+
+  async function loadDailyIndexLink(index: number): Promise<void> {
+    const safeIndex = clampIndex(index);
+    if (dayIndexLinkByIndex[safeIndex] !== undefined) return;
+    if (dayIndexLoading.has(safeIndex)) return;
+
+    dayIndexLoading.add(safeIndex);
+    dayIndexLoading = new Set(dayIndexLoading);
+    try {
+      const date = getDateForIndex(safeIndex);
+      const post = await nbaService.getDailyIndexPostForDate(toLocalDateKey(date));
+      dayIndexLinkByIndex[safeIndex] = post?.url || (post?.permalink ? `https://www.reddit.com${post.permalink}` : null);
+    } catch {
+      dayIndexLinkByIndex[safeIndex] = null;
+    } finally {
+      dayIndexLoading.delete(safeIndex);
+      dayIndexLoading = new Set(dayIndexLoading);
+    }
+  }
+
   async function prewarmRedditData(event: NBAEvent, force = false) {
     const eventId = event?.id;
     if (!eventId) return;
     if (!force && redditPrewarmed.has(eventId)) return;
 
-    // Clear any pending prewarm to avoid spamming during swipes
     if (prewarmTimeout) clearTimeout(prewarmTimeout);
-    
-    // Delay pre-warming slightly. If it's a swipe, this will be cancelled or ignored.
+
     prewarmTimeout = setTimeout(async () => {
       const teams = getEventTeamDisplayNames(event);
       if (!teams) return;
       const { awayName, homeName } = teams;
-      
+
       try {
         redditPrewarmed.add(eventId);
         await prewarmRedditForMatch(nbaService, awayName, homeName);
@@ -234,7 +438,7 @@
         redditPrewarmed.delete(eventId);
         console.error(`Failed to preload Reddit data for ${awayName} vs ${homeName}:`, error);
       }
-    }, 150); // 150ms delay to differentiate tap/hover from swipe
+    }, 150);
   }
 
   async function prewarmBoxscores(eventList: NBAEvent[]) {
@@ -261,82 +465,33 @@
     }
   }
 
-  let scoreboardContainer: HTMLElement;
-  onMount(() => {
-    // Restore saved date if exists
-    try {
-      const savedDate = sessionStorage.getItem('arrnba.selectedDate');
-      if (savedDate) {
-        selectedDate = new Date(savedDate);
-      }
-      const v = localStorage.getItem('arrnba.hideScores');
-      hideScores = v === '1';
-    } catch (e) {}
-
-    interval = setInterval(refresh, 15000);
-    
-    // Enable swiping between dates
-    createTouchGestures({
-      target: scoreboardContainer,
-      onSwipeRight: () => commitSwipe(-1),
-      onSwipeLeft: () => commitSwipe(1),
-      onHorizontalDrag: handleSwipeDrag,
-      onGestureEnd: (didSwipe) => {
-        if (!didSwipe) resetSwipePreview();
-      },
-      threshold: 50
-    });
-
-    refresh().then(() => {
-      prewarmActiveGames();
-    });
-    
-    // Load Reddit index in background
-    (async () => {
-      try {
-        await nbaService.getRedditIndex();
-      } catch (error) {
-        console.error('Failed to load Reddit index:', error);
-      }
-    })();
-  });
-
-  function prewarmActiveGames() {
-    events.forEach(e => {
+  function prewarmActiveGames(eventList: NBAEvent[]) {
+    eventList.forEach((e) => {
       const status = e?.competitions?.[0]?.status?.type?.name;
       if (status === 'STATUS_IN_PROGRESS' || status === 'STATUS_HALFTIME') {
         prewarmRedditData(e);
       }
     });
   }
-  onDestroy(() => {
-    if (interval) clearInterval(interval);
-    if (prewarmTimeout) clearTimeout(prewarmTimeout);
-  });
 
   function formatLocalTime(dateStr: string) {
     try {
       const date = new Date(dateStr);
-      const timeStr = date.toLocaleTimeString(undefined, { 
-        hour: '2-digit', 
+      const timeStr = date.toLocaleTimeString(undefined, {
+        hour: '2-digit',
         minute: '2-digit',
         hour12: false
       });
-      
-      // Get timezone abbreviation (e.g., AEST)
+
       const tzStr = date.toLocaleTimeString('en-AU', { timeZoneName: 'short' }).split(' ').pop();
-      
       return `${timeStr} ${tzStr}`;
     } catch {
       return '';
     }
   }
-  let hideScores = false;
+
   function toggleHide() {
     hideScores = !hideScores;
-    gameCards = events.map((event) => toGameCard(event, hideScores));
-    prevCards = prevEvents.map((event) => toGameCard(event, hideScores));
-    nextCards = nextEvents.map((event) => toGameCard(event, hideScores));
     try {
       localStorage.setItem('arrnba.hideScores', hideScores ? '1' : '0');
     } catch {}
@@ -374,17 +529,80 @@
     };
   }
 
-  $: gameCards = events.map((event) => toGameCard(event, hideScores));
+  function cardsForIndex(index: number): GameCardView[] {
+    const list = dayEvents[index] ?? [];
+    return list.map((event) => toGameCard(event, hideScores));
+  }
+
+  let scoreboardContainer: HTMLElement;
+  onMount(() => {
+    try {
+      const v = localStorage.getItem('arrnba.hideScores');
+      hideScores = v === '1';
+    } catch {}
+
+    prefetchAround(currentIndex);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        suppressInitialTrackAnimation = false;
+      });
+    });
+    prefetchScheduleWindow().catch(() => {});
+
+    interval = setInterval(() => {
+      loadDay(currentIndex, true).catch(() => {});
+    }, 15000);
+
+    createTouchGestures({
+      target: scoreboardContainer,
+      onSwipeRight: () => snapToIndex(currentIndex - 1),
+      onSwipeLeft: () => snapToIndex(currentIndex + 1),
+      onHorizontalDrag: handleSwipeDrag,
+      onGestureEnd: handleGestureEnd,
+      threshold: 50
+    });
+
+    (async () => {
+      try {
+        await nbaService.getRedditIndex();
+      } catch (error) {
+        console.error('Failed to load Reddit index:', error);
+      }
+    })();
+  });
+
+  onDestroy(() => {
+    if (interval) clearInterval(interval);
+    if (prewarmTimeout) clearTimeout(prewarmTimeout);
+    if (trackAnimationTimer) clearTimeout(trackAnimationTimer);
+  });
 </script>
 
-<div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;">
+<div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
   <div class="grid grid-cols-[1fr_auto_1fr] items-end mb-4" data-no-swipe="true">
     <div></div>
     <div class="justify-self-center" data-no-swipe="true">
       <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden">
-        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:click={() => changeDate(-1)}>&lt;</button>
-        <span class="px-3 py-1 text-sm font-medium min-w-[140px] text-center">{formatDateDisplay(selectedDate)}</span>
-        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-l border-white/10" on:click={() => changeDate(1)}>&gt;</button>
+        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
+        <button
+          data-no-swipe="true"
+          type="button"
+          class="px-3 py-1 text-sm font-medium min-w-[140px] text-center hover:bg-white/10"
+          on:pointerup={openDatePicker}
+          on:click|preventDefault={openDatePicker}
+        >
+          {formatDateDisplay(selectedDate)}
+        </button>
+        <input
+          bind:this={datePickerInput}
+          type="date"
+          class="sr-only"
+          value={toLocalDateKey(selectedDate)}
+          min={toLocalDateKey(getDateForIndex(0))}
+          max={toLocalDateKey(getDateForIndex(TOTAL_DAYS - 1))}
+          on:change={(e) => handleDatePicked((e.currentTarget as HTMLInputElement).value)}
+        />
+        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-l border-white/10" on:pointerup={() => requestDateDelta(1)} on:click={() => requestDateDelta(1)}>&gt;</button>
       </div>
     </div>
     <div class="justify-self-end" data-no-swipe="true">
@@ -397,7 +615,9 @@
           aria-label="Toggle scores visibility"
           aria-checked={!hideScores}
           class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
-          on:click={toggleHide}
+          style="touch-action: manipulation;"
+          on:pointerup={requestToggleHide}
+          on:click|preventDefault={requestToggleHide}
         >
           <span
             class="pointer-events-none absolute left-[2px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-transform duration-200 {hideScores ? '' : 'translate-x-5'}"
@@ -406,54 +626,60 @@
       </div>
     </div>
   </div>
-  {#if !events || events.length === 0}
-    <div class="text-white/70">No games found...</div>
-  {:else}
-    <div class="relative overflow-hidden" bind:clientWidth={cardsViewportWidth}>
-      <div
-        class="flex w-[300%]"
-        style="transform: translate3d(calc(-33.333333% + {trackOffsetPx}px), 0, 0); transition: {isSwipeDragging ? 'none' : 'transform 180ms ease-out'};"
-      >
-        {#each [prevCards, gameCards, nextCards] as paneCards, paneIndex}
-          <div class="w-1/3 shrink-0 px-0.5">
+
+  <div class="relative overflow-hidden" bind:clientWidth={cardsViewportWidth}>
+    <div
+      class="flex"
+      style="width: {(cardsViewportWidth || 1) * TOTAL_DAYS}px; transform: translate3d({(-currentIndex * (cardsViewportWidth || 1)) + dragOffsetPx}px, 0, 0); transition: {(isDragging || suppressInitialTrackAnimation || suppressTrackTransition) ? 'none' : `transform ${SWIPE_ANIM_MS}ms ease-out`};"
+    >
+      {#each dayOffsets as _offset, i}
+        <div class="shrink-0 px-0.5" style="width: {cardsViewportWidth || 1}px;">
+          {#if dayLoading.has(i) && !dayEvents[i]}
+            <div class="text-white/70">Loading games...</div>
+          {:else if !dayEvents[i] || dayEvents[i].length === 0}
+            <div class="text-white/70">No games found...</div>
+          {:else}
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {#if paneCards.length === 0}
-                <div class="text-white/70">No games found...</div>
-              {:else}
-                {#each paneCards as game (game.id)}
-                  {#if paneIndex === 1}
-                    <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} class="block border border-white/10 rounded p-3 hover:border-white/20">
-                      <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
-                        <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                        <div class="text-center font-medium">{game.awayAbbr}</div>
-                        <div class="text-center text-white/70 font-medium">@</div>
-                        <div class="text-center font-medium">{game.homeAbbr}</div>
-                        <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                        <div class="text-center">{game.awayScore}</div>
-                        <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
-                        <div class="text-center">{game.homeScore}</div>
-                      </div>
-                    </a>
-                  {:else}
-                    <div class="block border border-white/10 rounded p-3">
-                      <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
-                        <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                        <div class="text-center font-medium">{game.awayAbbr}</div>
-                        <div class="text-center text-white/70 font-medium">@</div>
-                        <div class="text-center font-medium">{game.homeAbbr}</div>
-                        <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                        <div class="text-center">{game.awayScore}</div>
-                        <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
-                        <div class="text-center">{game.homeScore}</div>
-                      </div>
-                    </div>
-                  {/if}
-                {/each}
-              {/if}
+              {#each cardsForIndex(i) as game (game.id)}
+                <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} on:pointerup={() => openGame(game.id)} on:click|preventDefault={() => openGame(game.id)} class="block border border-white/10 rounded p-3 hover:border-white/20" style="touch-action: manipulation;">
+                  <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
+                    <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                    <div class="text-center font-medium">{game.awayAbbr}</div>
+                    <div class="text-center text-white/70 font-medium">@</div>
+                    <div class="text-center font-medium">{game.homeAbbr}</div>
+                    <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                    <div class="text-center">{game.awayScore}</div>
+                    <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
+                    <div class="text-center">{game.homeScore}</div>
+                  </div>
+                </a>
+              {/each}
             </div>
+          {/if}
+          <div class="mt-3 text-center" data-no-swipe="true">
+            {#if dayIndexLinkByIndex[i]}
+              <a
+                href={dayIndexLinkByIndex[i] ?? '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-xs text-pink-300 hover:text-pink-200 underline"
+              >
+                Open Daily Thread + Game Thread Index
+              </a>
+            {:else if dayIndexLoading.has(i)}
+              <span class="text-xs text-white/60">Finding Daily Thread...</span>
+            {:else}
+              <button
+                class="text-xs text-pink-300 hover:text-pink-200 underline"
+                on:click={() => loadDailyIndexLink(i)}
+                type="button"
+              >
+                Load Daily Thread Link
+              </button>
+            {/if}
           </div>
-        {/each}
-      </div>
+        </div>
+      {/each}
     </div>
-  {/if}
+  </div>
 </div>

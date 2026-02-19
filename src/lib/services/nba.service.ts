@@ -11,7 +11,8 @@ import type {
   RedditThreadMapping,
   RedditSearchRequest,
   RedditSearchResponse,
-  RedditComment
+  RedditComment,
+  RedditPost
 } from '../types/nba';
 
 // Maintain the same export name and singleton for backward compatibility
@@ -46,12 +47,24 @@ export class NBAService {
     return this.redditService.searchRedditThread(request);
   }
 
+  getCachedThreadForEvent(eventId: string, type: 'live' | 'post') {
+    return this.redditService.getCachedThreadForEvent(eventId, type);
+  }
+
+  async getDailyIndexPostForDate(eventDate?: string): Promise<RedditPost | null> {
+    return this.redditService.getDailyIndexPostForDate(eventDate);
+  }
+
   async getRedditComments(postId: string, sort: 'new' | 'top' = 'new', permalink?: string, bypassCache: boolean = false): Promise<{ comments: RedditComment[] }> {
     return this.redditService.getRedditComments(postId, sort, permalink, bypassCache);
   }
 
   async prewarmBoxscores(eventIds: string[]): Promise<void> {
     return this.nbaService.prewarmBoxscores(eventIds);
+  }
+
+  async prewarmScoreboards(dates: string[]): Promise<void> {
+    return this.nbaService.prewarmScoreboards(dates);
   }
 
   clearRedditCache(): void {

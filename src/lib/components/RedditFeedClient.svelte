@@ -20,6 +20,8 @@
   export let awayName: string;
   export let homeName: string;
   export let mode: ViewMode;
+  export let eventDate: string | undefined = undefined;
+  export let eventId: string | undefined = undefined;
 
   let sortChoice: SortChoice = 'new';
   let loading = false;
@@ -69,11 +71,25 @@
 
   async function ensureThreadAndComments(targetMode: FeedMode): Promise<void> {
     const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
+    const eventAgeDays = (() => {
+      if (!eventDate) return 0;
+      const ts = new Date(eventDate).getTime();
+      if (!Number.isFinite(ts)) return 0;
+      return Math.abs((Date.now() - ts) / (24 * 60 * 60 * 1000));
+    })();
+    const preferDirectSearch = eventAgeDays > 3;
 
     try {
-      const mapping = await nbaService.getRedditIndex();
-      const entry = mapping[createPairKey(awayName, homeName)];
-      let post = targetMode === 'POST' ? entry?.pgt : entry?.gdt;
+      let post: RedditPost | null = null;
+      if (eventId) {
+        post = nbaService.getCachedThreadForEvent(eventId, targetMode === 'POST' ? 'post' : 'live');
+      }
+
+      if (!post && !preferDirectSearch) {
+        const mapping = await nbaService.getRedditIndex();
+        const entry = mapping[createPairKey(awayName, homeName)];
+        post = (targetMode === 'POST' ? entry?.pgt : entry?.gdt) ?? null;
+      }
 
       if (post) {
         cache[targetMode].thread = post;
@@ -89,7 +105,9 @@
         const result = await nbaService.searchRedditThread({
           type: targetMode === 'POST' ? 'post' : 'live',
           awayCandidates: [awayName],
-          homeCandidates: [homeName]
+          homeCandidates: [homeName],
+          eventDate,
+          eventId
         });
         post = result?.post ?? null;
 
@@ -177,7 +195,7 @@
   }
 </script>
 
-<div>
+<div class="min-w-0 overflow-x-hidden">
   <div class="flex items-center justify-between mb-3">
     <div class="flex items-center gap-2 text-xs font-semibold">
       <button class="px-3 py-1 rounded {sortChoice === 'new' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => { sortChoice = 'new'; reorder(); }}>NEW</button>
@@ -209,7 +227,7 @@
             {c.author} - {c.score} - {formatTimeAgo(c.created_utc)} {c._collapsed ? '- collapsed' : ''}
           </div>
           {#if !c._collapsed}
-            <div class="mt-1 whitespace-pre-wrap">{c.body}</div>
+            <div class="mt-1 whitespace-pre-wrap break-words">{c.body}</div>
             {#if c.replies && c.replies.length}
               <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
                 {#each c.replies as r, j (r.id || j)}
@@ -218,7 +236,7 @@
                       {r.author} - {r.score} - {formatTimeAgo(r.created_utc)} {r._collapsed ? '- collapsed' : ''}
                     </div>
                     {#if !r._collapsed}
-                      <div class="whitespace-pre-wrap">{r.body}</div>
+                      <div class="whitespace-pre-wrap break-words">{r.body}</div>
                       {#if r.replies && r.replies.length}
                         <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
                           {#each r.replies as rr, k (rr.id || k)}
@@ -227,7 +245,7 @@
                                 {rr.author} - {rr.score} - {formatTimeAgo(rr.created_utc)} {rr._collapsed ? '- collapsed' : ''}
                               </div>
                               {#if !rr._collapsed}
-                                <div class="whitespace-pre-wrap">{rr.body}</div>
+                                <div class="whitespace-pre-wrap break-words">{rr.body}</div>
                               {/if}
                             </div>
                           {/each}

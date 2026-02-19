@@ -17,6 +17,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
   let startY = 0;
   let isScrolling = false;
   let ignoreGesture = false;
+  let activeScrollContainer: HTMLElement | null = null;
   
   const threshold = options.threshold || 50;
   const target = options.target || (typeof document !== 'undefined' ? document : null);
@@ -34,19 +35,32 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     const targetEl = event.target as HTMLElement;
     ignoreGesture = !!targetEl?.closest?.('[data-no-swipe="true"]');
     if (ignoreGesture) return;
+    activeScrollContainer = (targetEl?.closest?.('[data-scrollable="true"]') as HTMLElement | null) ||
+                            (targetEl?.closest?.('.scroll-container') as HTMLElement | null);
     
     const isSwipeArea = !!(targetEl as any)?.closest?.('.swipe-area') || 
                         document.body.classList.contains('swipe-area') ||
                         document.documentElement.classList.contains('swipe-area');
     
-    const isScrollContainer = !!(targetEl as any)?.closest?.('[data-scrollable="true"]') || 
-                               !!(targetEl as any)?.closest?.('.scroll-container');
+    const isScrollContainer = !!activeScrollContainer;
 
-    if (isSwipeArea) {
-      isScrolling = false;
-    } else if (isScrollContainer) {
+    // Prioritize inner scrollable content over parent swipe areas.
+    if (isScrollContainer) {
       isScrolling = true;
+    } else if (isSwipeArea) {
+      isScrolling = false;
     }
+  }
+
+  function canContainerConsumeHorizontalDrag(container: HTMLElement, deltaX: number): boolean {
+    const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    if (maxScrollLeft <= 0) return false;
+
+    // Finger moving left means content scrolls right (increasing scrollLeft).
+    if (deltaX < 0) return container.scrollLeft < maxScrollLeft - 1;
+    // Finger moving right means content scrolls left (decreasing scrollLeft).
+    if (deltaX > 0) return container.scrollLeft > 1;
+    return false;
   }
 
   function handleTouchMove(event: TouchEvent) {
@@ -56,6 +70,17 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
 
     const deltaX = touch.clientX - startX;
     const deltaY = touch.clientY - startY;
+
+    if (activeScrollContainer && Math.abs(deltaX) > Math.abs(deltaY)) {
+      // If inner container can still scroll horizontally, keep swipe locked to that container.
+      if (canContainerConsumeHorizontalDrag(activeScrollContainer, deltaX)) {
+        isScrolling = true;
+      } else {
+        // At the horizontal edge: allow parent swipe strip to take over.
+        isScrolling = false;
+      }
+    }
+
     if (!isScrolling && Math.abs(deltaX) > Math.abs(deltaY)) {
       options.onHorizontalDrag?.(deltaX);
     }
@@ -98,6 +123,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     startX = 0;
     startY = 0;
     isScrolling = false;
+    activeScrollContainer = null;
     options.onGestureEnd?.(didSwipe);
   }
   
