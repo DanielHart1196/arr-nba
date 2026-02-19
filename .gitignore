@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# sveltekit build artifacts
+.svelte-kit/
+
+# vercel local/project output
+.vercel/
+
+# environment files
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
