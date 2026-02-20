@@ -68,12 +68,12 @@
   let suppressTrackTransition = false;
   let hideScores = false;
   let interval: any;
-  let refreshingScores = false;
   let loadRequestSeq = 0;
   const latestAppliedSeqByIndex = new Map<number, number>();
   let lastNavAt = 0;
   let lastToggleAt = 0;
   let lastOpenAt = 0;
+  let lastPickerOpenAt = 0;
   let datePickerInput: HTMLInputElement | null = null;
 
   function getInitialEventsFromSession(index: number): NBAEvent[] | null {
@@ -351,10 +351,21 @@
     if (!input) return;
     const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
     if (pickerInput.showPicker) {
-      pickerInput.showPicker();
-      return;
+      try {
+        pickerInput.showPicker();
+        return;
+      } catch {
+        // Fallback for browsers that reject showPicker when user activation is lost.
+      }
     }
     input.click();
+  }
+
+  function requestOpenDatePicker() {
+    const now = Date.now();
+    if (now - lastPickerOpenAt < 90) return;
+    lastPickerOpenAt = now;
+    openDatePicker();
   }
 
   function handleDatePicked(value: string) {
@@ -373,16 +384,6 @@
     if (now - lastToggleAt < 90) return;
     lastToggleAt = now;
     toggleHide();
-  }
-
-  async function requestScoreRefresh() {
-    if (refreshingScores) return;
-    refreshingScores = true;
-    try {
-      await loadDay(currentIndex, true);
-    } finally {
-      refreshingScores = false;
-    }
   }
 
   function openGame(gameId: string) {
@@ -609,29 +610,7 @@
 
 <div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
   <div class="grid grid-cols-[1fr_auto_1fr] items-end mb-4" data-no-swipe="true">
-    <div class="justify-self-start" data-no-swipe="true">
-      <button
-        data-no-swipe="true"
-        type="button"
-        class="h-9 w-9 rounded-full border border-white/20 text-white/85 hover:text-white flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-        aria-label="Refresh scores"
-        title="Refresh scores"
-        disabled={refreshingScores}
-        on:pointerup={requestScoreRefresh}
-        on:click|preventDefault={requestScoreRefresh}
-      >
-        <svg viewBox="0 0 24 24" class="h-5 w-5 {refreshingScores ? 'animate-spin' : ''}" aria-hidden="true" focusable="false">
-          <path
-            d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
-    </div>
+    <div class="justify-self-start h-9 w-9" data-no-swipe="true" aria-hidden="true"></div>
     <div class="justify-self-center" data-no-swipe="true">
       <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden">
         <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
@@ -639,8 +618,8 @@
           data-no-swipe="true"
           type="button"
           class="px-3 py-1 text-sm font-medium min-w-[140px] text-center hover:bg-white/10"
-          on:pointerup={openDatePicker}
-          on:click|preventDefault={openDatePicker}
+          on:pointerup={requestOpenDatePicker}
+          on:click|preventDefault={requestOpenDatePicker}
         >
           {formatDateDisplay(selectedDate)}
         </button>

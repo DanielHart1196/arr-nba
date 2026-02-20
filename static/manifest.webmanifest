@@ -1,6 +1,6 @@
 {
-  "name": "ARR NBA",
-  "short_name": "ARR NBA",
+  "name": "arr-nba",
+  "short_name": "arr-nba",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

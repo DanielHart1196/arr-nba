@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
+  import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
   import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
@@ -18,6 +19,10 @@
   let uiSide: 'home' | 'away' = 'away';
   let uiSourceLive: 'reddit' | 'away' | 'home' = 'reddit';
   let uiSourcePost: 'reddit' | 'away' | 'home' = 'reddit';
+  const placeholderStreams = [
+    { label: 'Feed A', url: 'https://sharkstreams.net/player.php?channel=1353' },
+    { label: 'Feed B', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4' }
+  ];
 
   if (typeof window !== 'undefined') {
     const search = new URLSearchParams(window.location.search);
@@ -236,13 +241,25 @@
     if (img) img.style.display = 'none';
   }
 
+  function formatHeaderDate(dateStr?: string): string {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
   $: if (payload?.linescores?.away?.team?.displayName && payload?.linescores?.home?.team?.displayName) {
     prewarmRedditForCurrentGame();
   }
 </script>
 
 <div class="p-4 min-h-screen flex flex-col">
-  <button class="text-white/70 hover:text-white" on:click={() => history.back()}>Back</button>
+  <StreamOverlay title="Game Stream (Placeholder)" sources={placeholderStreams} storageKey={`arrnba.streamOverlay.${data.id}`} />
+  <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
+    <button class="text-white/70 hover:text-white justify-self-start" on:click={() => history.back()}>Back</button>
+    <div class="text-center text-sm text-white/75 font-medium">{formatHeaderDate(payload?.eventDate)}</div>
+    <button class="invisible pointer-events-none justify-self-end" tabindex="-1" aria-hidden="true">Back</button>
+  </div>
   <div class="mt-2 mb-2 min-h-[60px] swipe-area">
     {#if payload?.linescores}
       <div class="flex items-center justify-between text-lg font-semibold">
