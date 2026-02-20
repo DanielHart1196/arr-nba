@@ -2,6 +2,7 @@ import { RedditDataSource } from '$lib/services/reddit.datasource';
 import { RedditTransformer } from '$lib/services/reddit.transformer';
 import { RedditService } from '$lib/services/reddit.service';
 import { apiCache } from '$lib/cache/api-cache';
+import { dev } from '$app/environment';
 
 const dataSource = new RedditDataSource();
 const transformer = new RedditTransformer();
@@ -47,7 +48,7 @@ export const GET = async ({ params, url }: any) => {
     return new Response(JSON.stringify({ 
       comments: [], 
       error: error?.message || 'Unknown error',
-      stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+      stack: dev ? error?.stack : undefined
     }), { status: 200, headers: NO_STORE_HEADERS });
   }
 };
