@@ -2,9 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { nbaService } from '../lib/services/nba.service';
-  import { prewarmRedditForMatch } from '../lib/services/reddit-prewarm.service';
   import { getTeamLogoAbbr } from '../lib/utils/team.utils';
-  import { addDays, getEventTeamDisplayNames, isEventOnDate, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
+  import { addDays, isEventOnDate, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
   import { createTouchGestures } from '../lib/composables/touch-gestures';
   import type { Event as NBAEvent } from '../lib/types/nba';
 
@@ -32,8 +31,10 @@
   const SWIPE_ANIM_MS = 120;
 
   const SCHEDULE_PREFETCH_KEY = 'arrnba.schedulePrefetch.v2';
-  const PREFETCH_PAST_DAYS = DAY_RANGE_PAST;
-  const PREFETCH_FUTURE_DAYS = DAY_RANGE_FUTURE;
+  const PREFETCH_PAST_DAYS = 5;
+  const PREFETCH_FUTURE_DAYS = 5;
+  const PREFETCH_CONCURRENCY = 2;
+  const PREFETCH_CHUNK_PAUSE_MS = 120;
 
   const baseDate = new Date();
   baseDate.setHours(0, 0, 0, 0);
@@ -67,13 +68,13 @@
   let suppressTrackTransition = false;
   let hideScores = false;
   let interval: any;
-  let prewarmTimeout: any;
+  let refreshingScores = false;
+  let loadRequestSeq = 0;
+  const latestAppliedSeqByIndex = new Map<number, number>();
   let lastNavAt = 0;
   let lastToggleAt = 0;
   let lastOpenAt = 0;
   let datePickerInput: HTMLInputElement | null = null;
-  let dayIndexLinkByIndex: Record<number, string | null> = {};
-  let dayIndexLoading = new Set<number>();
 
   function getInitialEventsFromSession(index: number): NBAEvent[] | null {
     if (typeof window === 'undefined') return null;
@@ -111,7 +112,7 @@
     const fromNext = readCachedScoreboardEvents(addDays(date, 1)) ?? [];
     if (fromPrev.length === 0 && fromCurrent.length === 0 && fromNext.length === 0) return null;
     return mergeUniqueAndSortEvents(
-      [...fromPrev, ...fromCurrent, ...fromNext].filter((event) => isEventOnDate(event, targetDateStr))
+      [...fromPrev, ...fromNext, ...fromCurrent].filter((event) => isEventOnDate(event, targetDateStr))
     );
   }
 
@@ -145,9 +146,9 @@
     ? { [initialIndex]: restoredInitialEvents }
     : (initialIndex === START_INDEX ? { [initialIndex]: data.events ?? [] } : {});
   let dayEvents: Record<number, NBAEvent[]> = hydrateAllDaysFromBrowserCache(initialSeedEvents);
+  let currentDisplayEvents: NBAEvent[] = dayEvents[initialIndex] ?? [];
   let dayLoading = new Set<number>();
 
-  const redditPrewarmed = new Set<string>();
   const boxscorePrewarmed = new Set<string>();
 
   function clampIndex(index: number): number {
@@ -161,6 +162,7 @@
   function setCurrentIndex(index: number): void {
     currentIndex = clampIndex(index);
     selectedDate = getDateForIndex(currentIndex);
+    currentDisplayEvents = dayEvents[currentIndex] ?? [];
   }
 
   function toLocalDateKey(date: Date): string {
@@ -187,30 +189,29 @@
     return Math.round((b - a) / DAY_MS);
   }
 
-  function hasSameEventOrder(a: NBAEvent[], b: NBAEvent[]) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i]?.id !== b[i]?.id) return false;
-    }
-    return true;
-  }
-
-  async function fetchMergedEventsForDate(date: Date): Promise<NBAEvent[]> {
+  async function fetchMergedEventsForDate(date: Date, forceRefresh = false): Promise<NBAEvent[]> {
     const targetDateStr = date.toDateString();
     const prevDay = addDays(date, -1);
     const nextDay = addDays(date, 1);
     const isOnTargetDay = (event: NBAEvent) => isEventOnDate(event, targetDateStr);
 
-    const [response, prevResponse, nextResponse] = await Promise.all([
-      nbaService.getScoreboard(toScoreboardDateKey(date)),
-      nbaService.getScoreboard(toScoreboardDateKey(prevDay)),
-      nbaService.getScoreboard(toScoreboardDateKey(nextDay))
-    ]);
-
+    const response = await nbaService.getScoreboard(toScoreboardDateKey(date), forceRefresh);
     const fromCurrent = (response.events ?? []).filter(isOnTargetDay);
+    if (forceRefresh && fromCurrent.length > 0) {
+      return mergeUniqueAndSortEvents(fromCurrent);
+    }
+
+    const [prevResponse, nextResponse] = await Promise.all([
+      nbaService.getScoreboard(toScoreboardDateKey(prevDay), forceRefresh),
+      nbaService.getScoreboard(toScoreboardDateKey(nextDay), forceRefresh)
+    ]);
     const fromPrev = (prevResponse.events ?? []).filter(isOnTargetDay);
     const fromNext = (nextResponse.events ?? []).filter(isOnTargetDay);
-    return mergeUniqueAndSortEvents([...fromPrev, ...fromCurrent, ...fromNext]);
+    return mergeUniqueAndSortEvents([...fromPrev, ...fromNext, ...fromCurrent]);
+  }
+
+  function isTodaySelected(): boolean {
+    return toScoreboardDateKey(selectedDate) === toScoreboardDateKey(new Date());
   }
 
   async function loadDay(index: number, force = false): Promise<void> {
@@ -218,17 +219,26 @@
     if (dayLoading.has(safeIndex)) return;
     if (!force && dayEvents[safeIndex]) return;
 
+    const requestSeq = ++loadRequestSeq;
     dayLoading.add(safeIndex);
     dayLoading = new Set(dayLoading);
     try {
       const date = getDateForIndex(safeIndex);
-      const merged = await fetchMergedEventsForDate(date);
+      const merged = await fetchMergedEventsForDate(date, force);
+
+      const lastApplied = latestAppliedSeqByIndex.get(safeIndex) ?? 0;
+      if (requestSeq < lastApplied) return;
+      latestAppliedSeqByIndex.set(safeIndex, requestSeq);
+
       dayEvents[safeIndex] = merged;
+      dayEvents = { ...dayEvents };
       saveDayEventsForIndex(safeIndex, merged);
+      if (safeIndex === currentIndex) {
+        currentDisplayEvents = merged;
+      }
 
       if (safeIndex === currentIndex) {
         prewarmBoxscores(merged);
-        prewarmActiveGames(merged);
       }
     } catch (error) {
       console.error(`Failed to load day index ${safeIndex}:`, error);
@@ -242,9 +252,6 @@
     loadDay(index).catch(() => {});
     loadDay(index - 1).catch(() => {});
     loadDay(index + 1).catch(() => {});
-    loadDailyIndexLink(index).catch(() => {});
-    loadDailyIndexLink(index - 1).catch(() => {});
-    loadDailyIndexLink(index + 1).catch(() => {});
   }
 
   function buildPrefetchDateKeys(anchor: Date) {
@@ -260,7 +267,15 @@
       if (typeof localStorage === 'undefined') return;
       if (localStorage.getItem(SCHEDULE_PREFETCH_KEY) === '1') return;
       const keys = buildPrefetchDateKeys(selectedDate);
-      await nbaService.prewarmScoreboards(keys);
+
+      // Run low-priority prefetch in small chunks so current-day loads stay responsive.
+      for (let i = 0; i < keys.length; i += PREFETCH_CONCURRENCY) {
+        const chunk = keys.slice(i, i + PREFETCH_CONCURRENCY);
+        await nbaService.prewarmScoreboards(chunk);
+        if (PREFETCH_CHUNK_PAUSE_MS > 0) {
+          await new Promise((resolve) => setTimeout(resolve, PREFETCH_CHUNK_PAUSE_MS));
+        }
+      }
       localStorage.setItem(SCHEDULE_PREFETCH_KEY, '1');
     } catch (error) {
       console.warn('Failed to prefetch schedule window:', error);
@@ -354,11 +369,20 @@
   }
 
   function requestToggleHide() {
-    if (interactionLocked()) return;
     const now = Date.now();
     if (now - lastToggleAt < 90) return;
     lastToggleAt = now;
     toggleHide();
+  }
+
+  async function requestScoreRefresh() {
+    if (refreshingScores) return;
+    refreshingScores = true;
+    try {
+      await loadDay(currentIndex, true);
+    } finally {
+      refreshingScores = false;
+    }
   }
 
   function openGame(gameId: string) {
@@ -366,6 +390,7 @@
     const now = Date.now();
     if (now - lastOpenAt < 120) return;
     lastOpenAt = now;
+    ensureBoxscorePrewarmById(gameId);
     goto(`/game/${gameId}`);
   }
 
@@ -400,47 +425,6 @@
     return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
   }
 
-  async function loadDailyIndexLink(index: number): Promise<void> {
-    const safeIndex = clampIndex(index);
-    if (dayIndexLinkByIndex[safeIndex] !== undefined) return;
-    if (dayIndexLoading.has(safeIndex)) return;
-
-    dayIndexLoading.add(safeIndex);
-    dayIndexLoading = new Set(dayIndexLoading);
-    try {
-      const date = getDateForIndex(safeIndex);
-      const post = await nbaService.getDailyIndexPostForDate(toLocalDateKey(date));
-      dayIndexLinkByIndex[safeIndex] = post?.url || (post?.permalink ? `https://www.reddit.com${post.permalink}` : null);
-    } catch {
-      dayIndexLinkByIndex[safeIndex] = null;
-    } finally {
-      dayIndexLoading.delete(safeIndex);
-      dayIndexLoading = new Set(dayIndexLoading);
-    }
-  }
-
-  async function prewarmRedditData(event: NBAEvent, force = false) {
-    const eventId = event?.id;
-    if (!eventId) return;
-    if (!force && redditPrewarmed.has(eventId)) return;
-
-    if (prewarmTimeout) clearTimeout(prewarmTimeout);
-
-    prewarmTimeout = setTimeout(async () => {
-      const teams = getEventTeamDisplayNames(event);
-      if (!teams) return;
-      const { awayName, homeName } = teams;
-
-      try {
-        redditPrewarmed.add(eventId);
-        await prewarmRedditForMatch(nbaService, awayName, homeName);
-      } catch (error) {
-        redditPrewarmed.delete(eventId);
-        console.error(`Failed to preload Reddit data for ${awayName} vs ${homeName}:`, error);
-      }
-    }, 150);
-  }
-
   async function prewarmBoxscores(eventList: NBAEvent[]) {
     try {
       const ids = eventList
@@ -455,23 +439,16 @@
     }
   }
 
-  function prewarmGameData(game: GameCardView) {
-    prewarmRedditData(game.event);
-    if (!boxscorePrewarmed.has(game.id)) {
-      boxscorePrewarmed.add(game.id);
-      nbaService.getBoxscore(game.id).catch(() => {
-        boxscorePrewarmed.delete(game.id);
-      });
-    }
+  function ensureBoxscorePrewarmById(gameId: string) {
+    if (boxscorePrewarmed.has(gameId)) return;
+    boxscorePrewarmed.add(gameId);
+    nbaService.getBoxscore(gameId).catch(() => {
+      boxscorePrewarmed.delete(gameId);
+    });
   }
 
-  function prewarmActiveGames(eventList: NBAEvent[]) {
-    eventList.forEach((e) => {
-      const status = e?.competitions?.[0]?.status?.type?.name;
-      if (status === 'STATUS_IN_PROGRESS' || status === 'STATUS_HALFTIME') {
-        prewarmRedditData(e);
-      }
-    });
+  function prewarmGameData(game: GameCardView) {
+    ensureBoxscorePrewarmById(game.id);
   }
 
   function formatLocalTime(dateStr: string) {
@@ -506,7 +483,7 @@
     return event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === side);
   }
 
-  function toGameCard(event: NBAEvent, scoresHidden: boolean): GameCardView {
+  function toGameCard(event: NBAEvent): GameCardView {
     const away = getCompetitor(event, 'away');
     const home = getCompetitor(event, 'home');
     const statusName = event?.competitions?.[0]?.status?.type?.name ?? '';
@@ -522,16 +499,71 @@
       homeAbbr,
       awayLogo: `/logos/${awayAbbr}.svg`,
       homeLogo: `/logos/${homeAbbr}.svg`,
-      awayScore: (scheduled || scoresHidden) ? '-' : (away?.score ?? 0),
-      homeScore: (scheduled || scoresHidden) ? '-' : (home?.score ?? 0),
+      awayScore: away?.score ?? 0,
+      homeScore: home?.score ?? 0,
       statusText: scheduled ? formatLocalTime(event.date) : (event?.competitions?.[0]?.status?.type?.shortDetail ?? ''),
       scheduled
     };
   }
 
-  function cardsForIndex(index: number): GameCardView[] {
-    const list = dayEvents[index] ?? [];
-    return list.map((event) => toGameCard(event, hideScores));
+  function cardsForEvents(list: NBAEvent[]): GameCardView[] {
+    return list.map((event) => toGameCard(event));
+  }
+
+  function parseClockSeconds(clock: unknown): number | null {
+    if (clock === null || clock === undefined) return null;
+    const raw = String(clock).trim();
+    if (!raw) return null;
+    const m = /^(\d{1,2}):(\d{2})$/.exec(raw);
+    if (!m) return null;
+    const minutes = Number(m[1]);
+    const seconds = Number(m[2]);
+    if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+    return (minutes * 60) + seconds;
+  }
+
+  function parseClockFromShortDetail(shortDetail: unknown): number | null {
+    if (shortDetail === null || shortDetail === undefined) return null;
+    const raw = String(shortDetail).trim();
+    if (!raw) return null;
+    const match = /(\d{1,2}):(\d{2})/.exec(raw);
+    if (!match) return null;
+    return parseClockSeconds(`${match[1]}:${match[2]}`);
+  }
+
+  function parsePeriodFromShortDetail(shortDetail: unknown): number | null {
+    if (shortDetail === null || shortDetail === undefined) return null;
+    const raw = String(shortDetail).toUpperCase();
+    if (!raw) return null;
+    if (raw.includes('OT')) return 5;
+    const m = /(\d+)(?:ST|ND|RD|TH)/.exec(raw);
+    if (!m) return null;
+    const p = Number(m[1]);
+    return Number.isFinite(p) ? p : null;
+  }
+
+  function isCloseGame(event: NBAEvent): boolean {
+    const comp = event?.competitions?.[0];
+    const status = comp?.status;
+    const statusName = status?.type?.name ?? '';
+    const liveStatuses = new Set(['STATUS_IN_PROGRESS', 'STATUS_END_PERIOD']);
+    if (!liveStatuses.has(statusName)) return false;
+
+    const shortDetail = status?.type?.shortDetail ?? status?.short ?? '';
+    const periodCandidate = Number(status?.period ?? NaN);
+    const period = Number.isFinite(periodCandidate) && periodCandidate > 0
+      ? periodCandidate
+      : (parsePeriodFromShortDetail(shortDetail) ?? 0);
+    if (period < 4) return false;
+
+    const clockSeconds = parseClockSeconds(status?.clock) ?? parseClockFromShortDetail(shortDetail);
+    if (clockSeconds === null || clockSeconds > 5 * 60) return false;
+
+    const awayScore = Number(comp?.competitors?.find((c) => c.homeAway === 'away')?.score ?? NaN);
+    const homeScore = Number(comp?.competitors?.find((c) => c.homeAway === 'home')?.score ?? NaN);
+    if (!Number.isFinite(awayScore) || !Number.isFinite(homeScore)) return false;
+
+    return Math.abs(awayScore - homeScore) <= 5;
   }
 
   let scoreboardContainer: HTMLElement;
@@ -541,17 +573,22 @@
       hideScores = v === '1';
     } catch {}
 
-    prefetchAround(currentIndex);
+    loadDay(currentIndex, true).catch(() => {});
+    loadDay(currentIndex - 1).catch(() => {});
+    loadDay(currentIndex + 1).catch(() => {});
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         suppressInitialTrackAnimation = false;
       });
     });
-    prefetchScheduleWindow().catch(() => {});
+    setTimeout(() => {
+      prefetchScheduleWindow().catch(() => {});
+    }, 1200);
 
     interval = setInterval(() => {
+      if (!isTodaySelected()) return;
       loadDay(currentIndex, true).catch(() => {});
-    }, 15000);
+    }, 10000);
 
     createTouchGestures({
       target: scoreboardContainer,
@@ -562,25 +599,39 @@
       threshold: 50
     });
 
-    (async () => {
-      try {
-        await nbaService.getRedditIndex();
-      } catch (error) {
-        console.error('Failed to load Reddit index:', error);
-      }
-    })();
   });
 
   onDestroy(() => {
     if (interval) clearInterval(interval);
-    if (prewarmTimeout) clearTimeout(prewarmTimeout);
     if (trackAnimationTimer) clearTimeout(trackAnimationTimer);
   });
 </script>
 
 <div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
   <div class="grid grid-cols-[1fr_auto_1fr] items-end mb-4" data-no-swipe="true">
-    <div></div>
+    <div class="justify-self-start" data-no-swipe="true">
+      <button
+        data-no-swipe="true"
+        type="button"
+        class="h-9 w-9 rounded-full border border-white/20 text-white/85 hover:text-white flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+        aria-label="Refresh scores"
+        title="Refresh scores"
+        disabled={refreshingScores}
+        on:pointerup={requestScoreRefresh}
+        on:click|preventDefault={requestScoreRefresh}
+      >
+        <svg viewBox="0 0 24 24" class="h-5 w-5 {refreshingScores ? 'animate-spin' : ''}" aria-hidden="true" focusable="false">
+          <path
+            d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+    </div>
     <div class="justify-self-center" data-no-swipe="true">
       <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden">
         <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
@@ -616,7 +667,6 @@
           aria-checked={!hideScores}
           class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
           style="touch-action: manipulation;"
-          on:pointerup={requestToggleHide}
           on:click|preventDefault={requestToggleHide}
         >
           <span
@@ -626,7 +676,6 @@
       </div>
     </div>
   </div>
-
   <div class="relative overflow-hidden" bind:clientWidth={cardsViewportWidth}>
     <div
       class="flex"
@@ -634,50 +683,30 @@
     >
       {#each dayOffsets as _offset, i}
         <div class="shrink-0 px-0.5" style="width: {cardsViewportWidth || 1}px;">
-          {#if dayLoading.has(i) && !dayEvents[i]}
-            <div class="text-white/70">Loading games...</div>
-          {:else if !dayEvents[i] || dayEvents[i].length === 0}
-            <div class="text-white/70">No games found...</div>
-          {:else}
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {#each cardsForIndex(i) as game (game.id)}
-                <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} on:pointerup={() => openGame(game.id)} on:click|preventDefault={() => openGame(game.id)} class="block border border-white/10 rounded p-3 hover:border-white/20" style="touch-action: manipulation;">
-                  <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
-                    <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                    <div class="text-center font-medium">{game.awayAbbr}</div>
-                    <div class="text-center text-white/70 font-medium">@</div>
-                    <div class="text-center font-medium">{game.homeAbbr}</div>
-                    <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
-                    <div class="text-center">{game.awayScore}</div>
-                    <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
-                    <div class="text-center">{game.homeScore}</div>
-                  </div>
-                </a>
-              {/each}
-            </div>
-          {/if}
-          <div class="mt-3 text-center" data-no-swipe="true">
-            {#if dayIndexLinkByIndex[i]}
-              <a
-                href={dayIndexLinkByIndex[i] ?? '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs text-pink-300 hover:text-pink-200 underline"
-              >
-                Open Daily Thread + Game Thread Index
-              </a>
-            {:else if dayIndexLoading.has(i)}
-              <span class="text-xs text-white/60">Finding Daily Thread...</span>
+          {#if i === currentIndex}
+            {#if dayLoading.has(i) && currentDisplayEvents.length === 0}
+              <div class="text-white/70">Loading games...</div>
+            {:else if currentDisplayEvents.length === 0}
+              <div class="text-white/70">No games found...</div>
             {:else}
-              <button
-                class="text-xs text-pink-300 hover:text-pink-200 underline"
-                on:click={() => loadDailyIndexLink(i)}
-                type="button"
-              >
-                Load Daily Thread Link
-              </button>
+              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {#each cardsForEvents(currentDisplayEvents) as game (game.id)}
+                  <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:pointerdown={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} on:pointerup={() => openGame(game.id)} on:click|preventDefault={() => openGame(game.id)} class="block border rounded p-3 {isCloseGame(game.event) ? 'border-red-500/80 hover:border-red-400' : 'border-white/10 hover:border-white/20'}" style="touch-action: manipulation;">
+                    <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
+                      <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                      <div class="text-center font-medium">{game.awayAbbr}</div>
+                      <div class="text-center text-white/70 font-medium">@</div>
+                      <div class="text-center font-medium">{game.homeAbbr}</div>
+                      <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                      <div class="text-center">{(game.scheduled || hideScores) ? '-' : game.awayScore}</div>
+                      <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
+                      <div class="text-center">{(game.scheduled || hideScores) ? '-' : game.homeScore}</div>
+                    </div>
+                  </a>
+                {/each}
+              </div>
             {/if}
-          </div>
+          {/if}
         </div>
       {/each}
     </div>

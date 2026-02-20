@@ -9,6 +9,8 @@ export interface TouchGestureOptions {
   onGestureEnd?: (didSwipe: boolean) => void;
   threshold?: number;
   preventScroll?: boolean;
+  lockHorizontalSwipeAfterVerticalScroll?: boolean;
+  lockHorizontalSwipeAfterInnerHorizontalScroll?: boolean;
   target?: HTMLElement | Document;
 }
 
@@ -16,6 +18,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
   let startX = 0;
   let startY = 0;
   let isScrolling = false;
+  let lockHorizontalSwipe = false;
   let ignoreGesture = false;
   let activeScrollContainer: HTMLElement | null = null;
   
@@ -31,6 +34,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     startX = touch.clientX;
     startY = touch.clientY;
     isScrolling = false;
+    lockHorizontalSwipe = false;
 
     const targetEl = event.target as HTMLElement;
     ignoreGesture = !!targetEl?.closest?.('[data-no-swipe="true"]');
@@ -70,18 +74,27 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
 
     const deltaX = touch.clientX - startX;
     const deltaY = touch.clientY - startY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
 
-    if (activeScrollContainer && Math.abs(deltaX) > Math.abs(deltaY)) {
+    if (options.lockHorizontalSwipeAfterVerticalScroll && absY > absX && absY > 6) {
+      lockHorizontalSwipe = true;
+    }
+
+    if (activeScrollContainer && absX > absY) {
       // If inner container can still scroll horizontally, keep swipe locked to that container.
       if (canContainerConsumeHorizontalDrag(activeScrollContainer, deltaX)) {
         isScrolling = true;
+        if (options.lockHorizontalSwipeAfterInnerHorizontalScroll) {
+          lockHorizontalSwipe = true;
+        }
       } else {
         // At the horizontal edge: allow parent swipe strip to take over.
         isScrolling = false;
       }
     }
 
-    if (!isScrolling && Math.abs(deltaX) > Math.abs(deltaY)) {
+    if (!isScrolling && !lockHorizontalSwipe && absX > absY) {
       options.onHorizontalDrag?.(deltaX);
     }
   }
@@ -101,7 +114,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     
     let didSwipe = false;
     if (Math.abs(deltaX) > threshold && Math.abs(deltaY) < 100) {
-      if (!isScrolling) {
+      if (!isScrolling && !lockHorizontalSwipe) {
         if (deltaX > 0 && options.onSwipeRight) {
           options.onSwipeRight();
           didSwipe = true;
@@ -123,6 +136,7 @@ export function createTouchGestures(options: TouchGestureOptions = {}) {
     startX = 0;
     startY = 0;
     isScrolling = false;
+    lockHorizontalSwipe = false;
     activeScrollContainer = null;
     options.onGestureEnd?.(didSwipe);
   }

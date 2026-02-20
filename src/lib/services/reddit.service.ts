@@ -9,8 +9,12 @@ import type {
 import type { IRedditDataSource } from './interfaces';
 import type { RedditTransformer } from './reddit.transformer';
 import { createPairKey } from '$lib/utils/reddit.utils';
+import { idbGet, idbSet } from '$lib/cache/indexeddb-cache';
 
 export class RedditService {
+  private readonly commentsRefreshCooldownMs = 15 * 1000;
+  private readonly commentsRefreshTracker = new Map<string, number>();
+
   constructor(
     private readonly dataSource: IRedditDataSource,
     private readonly transformer: RedditTransformer,
@@ -36,6 +40,31 @@ export class RedditService {
     try {
       localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
     } catch {}
+  }
+
+  private refreshCommentsInBackground(
+    cacheKey: string,
+    postId: string,
+    sort: 'new' | 'top',
+    permalink: string | undefined,
+    ttl: number
+  ): void {
+    if (typeof window === 'undefined') return;
+    const now = Date.now();
+    const last = this.commentsRefreshTracker.get(cacheKey) ?? 0;
+    if (now - last < this.commentsRefreshCooldownMs) return;
+    this.commentsRefreshTracker.set(cacheKey, now);
+
+    (async () => {
+      try {
+        const json = await this.dataSource.getCommentsRaw(postId, sort, permalink);
+        const result = this.transformer.transformComments(json);
+        this.cache.set(cacheKey, result, ttl);
+        await idbSet(cacheKey, result);
+      } catch {
+        // Background refresh failure should not disrupt cached viewing.
+      }
+    })();
   }
 
   private eventThreadCacheKey(eventId: string): string {
@@ -268,6 +297,50 @@ export class RedditService {
     return result;
   }
 
+  async searchSubredditThread(subreddit: string, request: RedditSearchRequest): Promise<RedditSearchResponse> {
+    const sub = (subreddit || '').trim().toLowerCase();
+    if (!sub) return { post: undefined };
+
+    const cacheKey = `reddit:subthread:${sub}:${request.type}:${createPairKey(request.awayCandidates?.[0] ?? '', request.homeCandidates?.[0] ?? '')}:${request.eventDate ?? ''}`;
+    const cached = this.cache.get<RedditSearchResponse>(cacheKey);
+    if (cached && !(cached instanceof Promise)) return cached;
+
+    try {
+      const [newFeed, hotFeed] = await Promise.all([
+        this.dataSource.getSubredditFeed(sub, 'new'),
+        this.dataSource.getSubredditFeed(sub, 'hot')
+      ]);
+
+      const allPosts = [
+        ...(newFeed?.data?.children ?? []),
+        ...(hotFeed?.data?.children ?? [])
+      ];
+
+      const seen = new Set<string>();
+      const uniquePosts = allPosts.filter((post: any) => {
+        const id = String(post?.data?.id ?? '');
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+
+      const wrappedJson = { data: { children: uniquePosts } };
+      const result = this.transformer.transformSearch(
+        wrappedJson,
+        request.type,
+        request.eventDate,
+        request.awayCandidates,
+        request.homeCandidates
+      );
+
+      this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
+      return result;
+    } catch (error) {
+      console.error(`Subreddit thread search failed for r/${sub}:`, error);
+      return { post: undefined };
+    }
+  }
+
   private async fallbackSearchFromFeed(request: RedditSearchRequest): Promise<RedditSearchResponse> {
     try {
       // Fetch both 'new' and 'hot' to increase chances of finding it
@@ -316,10 +389,12 @@ export class RedditService {
     const local = this.cache.get<{ comments: RedditComment[] }>(cacheKey);
     if (local && !(local instanceof Promise) && !bypassCache) return local;
     if (!bypassCache) {
-      const browserCached = this.readBrowserCache<{ comments: RedditComment[] }>(cacheKey, ttl);
-      if (browserCached) {
-        this.cache.set(cacheKey, browserCached, ttl);
-        return browserCached;
+      // Stale-first from IndexedDB: instant return for previously viewed threads.
+      const persisted = await idbGet<{ comments: RedditComment[] }>(cacheKey);
+      if (persisted?.value) {
+        this.cache.set(cacheKey, persisted.value, ttl);
+        this.refreshCommentsInBackground(cacheKey, postId, sort, permalink, ttl);
+        return persisted.value;
       }
     }
 
@@ -329,7 +404,7 @@ export class RedditService {
     
     // 3. Update local cache
     this.cache.set(cacheKey, result, ttl);
-    this.writeBrowserCache(cacheKey, result);
+    await idbSet(cacheKey, result);
 
     return result;
   }

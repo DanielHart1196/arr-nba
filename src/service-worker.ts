@@ -14,10 +14,6 @@ function isSameOriginAsset(url: URL): boolean {
 }
 
 function isCachedApi(url: URL): boolean {
-  if (url.pathname === '/api/scoreboard' && url.origin === self.location.origin) return true;
-  if ((url.hostname === 'site.api.espn.com' || url.hostname === 'site.web.api.espn.com') && url.pathname.includes('/sports/basketball/nba/')) {
-    return url.pathname.includes('/scoreboard') || url.pathname.includes('/summary');
-  }
   return false;
 }
 

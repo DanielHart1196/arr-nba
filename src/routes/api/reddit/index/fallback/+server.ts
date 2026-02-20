@@ -1,12 +1,17 @@
 import { expandTeamNames } from '../../../../../lib/utils/team-matching.utils';
 
+const NO_STORE_HEADERS = {
+  'content-type': 'application/json',
+  'cache-control': 'no-store'
+};
+
 export const POST = async ({ request }: any) => {
   try {
     const body = await request.json();
     const { awayTeam, homeTeam } = body;
     
     if (!awayTeam || !homeTeam) {
-      return new Response(JSON.stringify({ error: 'Missing team names' }), { status: 400 });
+      return new Response(JSON.stringify({ error: 'Missing team names' }), { status: 400, headers: NO_STORE_HEADERS });
     }
     
     // Search for post-game thread as fallback
@@ -24,7 +29,7 @@ export const POST = async ({ request }: any) => {
       headers: { 'User-Agent': USER_AGENT }
     });
     if (!res.ok) {
-      return new Response(JSON.stringify({ error: `Search failed: ${res.status}` }), { status: 500 });
+      return new Response(JSON.stringify({ error: `Search failed: ${res.status}` }), { status: 500, headers: NO_STORE_HEADERS });
     }
     
     const json = await res.json();
@@ -45,7 +50,7 @@ export const POST = async ({ request }: any) => {
     });
     
     if (fresh.length === 0) {
-      return new Response(JSON.stringify({ error: 'No post-game thread found' }), { status: 404 });
+      return new Response(JSON.stringify({ error: 'No post-game thread found' }), { status: 404, headers: NO_STORE_HEADERS });
     }
     
     // Sort by score (highest first)
@@ -65,11 +70,11 @@ export const POST = async ({ request }: any) => {
     
     return new Response(JSON.stringify({ post: result }), { 
       status: 200, 
-      headers: { 'content-type': 'application/json' } 
+      headers: NO_STORE_HEADERS 
     });
     
   } catch (error) {
     console.error('Fallback search error:', error);
-    return new Response(JSON.stringify({ error: 'Fallback search failed' }), { status: 500 });
+    return new Response(JSON.stringify({ error: 'Fallback search failed' }), { status: 500, headers: NO_STORE_HEADERS });
   }
 };

@@ -58,8 +58,8 @@ export class NBAService {
     } catch {}
   }
 
-  private async fetchScoreboard(date?: string): Promise<ScoreboardResponse> {
-    const data = await this.dataSource.getScoreboard(date);
+  private async fetchScoreboard(date?: string, forceRefresh: boolean = false): Promise<ScoreboardResponse> {
+    const data = await this.dataSource.getScoreboard(date, forceRefresh);
     return { events: data?.events ?? [] };
   }
 
@@ -73,7 +73,7 @@ export class NBAService {
 
     (async () => {
       try {
-        const fresh = await this.fetchScoreboard(date);
+        const fresh = await this.fetchScoreboard(date, true);
         const nextHash = this.hashPayload(fresh);
         if (nextHash !== currentHash) {
           this.writeBrowserScoreboard(date, fresh, nextHash);
@@ -88,15 +88,27 @@ export class NBAService {
     })();
   }
 
-  async getScoreboard(date?: string): Promise<ScoreboardResponse> {
+  async getScoreboard(date?: string, forceRefresh: boolean = false): Promise<ScoreboardResponse> {
     const cacheKey = date ? `scoreboard:${date}` : 'scoreboard';
 
     if (!this.isBrowser()) {
+      if (forceRefresh) {
+        const fresh = await this.fetchScoreboard(date, true);
+        this.cache.set(cacheKey, fresh, 30 * 1000);
+        return fresh;
+      }
       return this.cache.getOrFetch(
         cacheKey,
-        async () => this.fetchScoreboard(date),
+        async () => this.fetchScoreboard(date, false),
         30 * 1000 // 30 seconds TTL
       );
+    }
+
+    if (forceRefresh) {
+      const fresh = await this.fetchScoreboard(date, true);
+      this.writeBrowserScoreboard(date, fresh);
+      this.cache.set(cacheKey, fresh, 30 * 1000);
+      return fresh;
     }
 
     const memoryCached = this.cache.get<ScoreboardResponse>(cacheKey);
@@ -118,12 +130,19 @@ export class NBAService {
     return this.cache.getOrFetch(
       cacheKey,
       async () => {
-        const fresh = await this.fetchScoreboard(date);
+        const fresh = await this.fetchScoreboard(date, false);
         this.writeBrowserScoreboard(date, fresh);
         return fresh;
       },
       30 * 1000
     );
+  }
+
+  getCachedBoxscore(eventId: string): BoxscoreResponse | null {
+    const cacheKey = `boxscore:${eventId}`;
+    const cached = this.cache.get<BoxscoreResponse>(cacheKey);
+    if (!cached || cached instanceof Promise) return null;
+    return cached;
   }
 
   async getBoxscore(eventId: string): Promise<BoxscoreResponse> {

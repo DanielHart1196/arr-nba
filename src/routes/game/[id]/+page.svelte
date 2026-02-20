@@ -3,16 +3,74 @@
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
-  import { refreshLiveRedditForMatch } from '../../../lib/services/reddit-prewarm.service';
+  import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
+  import type { Event as NBAEvent } from '../../../lib/types/nba';
   
   export let data: { id: string; streamed?: { payload?: Promise<BoxscoreResponse> } };
-  let payload: BoxscoreResponse | null = null;
+  let payload: BoxscoreResponse | null = nbaService.getCachedBoxscore(data.id);
   let interval: any;
-  let redditInterval: any;
+  let scoreboardInterval: any;
   let handledStreamedPayload: Promise<BoxscoreResponse> | undefined;
   let redditPrewarmedForGame = false;
+  let uiMode: 'LIVE' | 'STATS' | 'POST' = 'STATS';
+  let uiSide: 'home' | 'away' = 'away';
+  let uiSourceLive: 'reddit' | 'away' | 'home' = 'reddit';
+  let uiSourcePost: 'reddit' | 'away' | 'home' = 'reddit';
+
+  if (typeof window !== 'undefined') {
+    const search = new URLSearchParams(window.location.search);
+    const modeParam = (search.get('mode') || '').toUpperCase();
+    const sideParam = (search.get('side') || '').toLowerCase();
+    const sourceParam = (search.get('source') || '').toLowerCase();
+    const sourceLiveParam = (search.get('sourceLive') || '').toLowerCase();
+    const sourcePostParam = (search.get('sourcePost') || '').toLowerCase();
+
+    if (modeParam === 'LIVE' || modeParam === 'STATS' || modeParam === 'POST') uiMode = modeParam;
+    if (sideParam === 'home' || sideParam === 'away') uiSide = sideParam;
+    if (sourceParam === 'reddit' || sourceParam === 'away' || sourceParam === 'home') {
+      uiSourceLive = sourceParam;
+      uiSourcePost = sourceParam;
+    }
+    if (sourceLiveParam === 'reddit' || sourceLiveParam === 'away' || sourceLiveParam === 'home') uiSourceLive = sourceLiveParam;
+    if (sourcePostParam === 'reddit' || sourcePostParam === 'away' || sourcePostParam === 'home') uiSourcePost = sourcePostParam;
+  }
+
+  function writeUiStateToUrl(): void {
+    if (typeof window === 'undefined') return;
+    const next = new URL(window.location.href);
+    next.searchParams.set('mode', uiMode);
+    next.searchParams.set('side', uiSide);
+    next.searchParams.set('sourceLive', uiSourceLive);
+    next.searchParams.set('sourcePost', uiSourcePost);
+    next.searchParams.delete('source');
+    window.history.replaceState(window.history.state, '', `${next.pathname}${next.search}`);
+  }
+
+  function handleViewStateChange(state: { mode: 'LIVE' | 'STATS' | 'POST'; side: 'home' | 'away' }): void {
+    let changed = false;
+    if (uiMode !== state.mode) {
+      uiMode = state.mode;
+      changed = true;
+    }
+    if (uiSide !== state.side) {
+      uiSide = state.side;
+      changed = true;
+    }
+    if (changed) writeUiStateToUrl();
+  }
+
+  function handleSourceChange(state: { mode: 'LIVE' | 'POST'; source: 'reddit' | 'away' | 'home' }): void {
+    if (state.mode === 'LIVE') {
+      if (uiSourceLive === state.source) return;
+      uiSourceLive = state.source;
+    } else {
+      if (uiSourcePost === state.source) return;
+      uiSourcePost = state.source;
+    }
+    writeUiStateToUrl();
+  }
   
   async function refresh() {
     try {
@@ -20,6 +78,64 @@
       payload = { ...response };
     } catch (error) {
       console.error('Failed to refresh boxscore:', error);
+    }
+  }
+
+  function applyScoreboardEvent(event: NBAEvent): void {
+    if (!payload) return;
+
+    const comp = event?.competitions?.[0];
+    const statusType = comp?.status?.type;
+    const competitors = comp?.competitors ?? [];
+    const away = competitors.find((c) => c.homeAway === 'away');
+    const home = competitors.find((c) => c.homeAway === 'home');
+
+    if (!payload.status) payload.status = {};
+    payload.status = {
+      ...payload.status,
+      name: statusType?.name ?? payload.status?.name,
+      short: statusType?.shortDetail ?? payload.status?.short,
+      clock: String(comp?.status?.clock ?? payload.status?.clock ?? ''),
+      period: Number(comp?.status?.period ?? payload.status?.period ?? 0)
+    };
+
+    if (payload.linescores?.away && away) {
+      const awayPeriods = (away.linescores ?? [])
+        .map((p: any) => Number(p?.value ?? p?.displayValue ?? p))
+        .filter((n: number) => Number.isFinite(n));
+      payload.linescores.away = {
+        ...payload.linescores.away,
+        total: Number(away.score ?? payload.linescores.away.total ?? 0),
+        periods: awayPeriods.length > 0 ? awayPeriods : payload.linescores.away.periods
+      };
+    }
+
+    if (payload.linescores?.home && home) {
+      const homePeriods = (home.linescores ?? [])
+        .map((p: any) => Number(p?.value ?? p?.displayValue ?? p))
+        .filter((n: number) => Number.isFinite(n));
+      payload.linescores.home = {
+        ...payload.linescores.home,
+        total: Number(home.score ?? payload.linescores.home.total ?? 0),
+        periods: homePeriods.length > 0 ? homePeriods : payload.linescores.home.periods
+      };
+    }
+
+    payload = { ...payload };
+  }
+
+  async function syncLiveFromScoreboard() {
+    const eventDate = payload?.eventDate ? new Date(payload.eventDate) : new Date();
+    const key = toScoreboardDateKey(eventDate);
+
+    try {
+      const board = await nbaService.getScoreboard(key, true);
+      const event = (board?.events ?? []).find((e) => String(e.id) === String(data.id));
+      if (event) {
+        applyScoreboardEvent(event);
+      }
+    } catch (error) {
+      console.error('Failed to sync live game from scoreboard:', error);
     }
   }
 
@@ -38,17 +154,10 @@
     }
   }
   
-  async function refreshRedditData() {
-    const awayName = payload?.linescores?.away?.team?.displayName;
-    const homeName = payload?.linescores?.home?.team?.displayName;
-    
-    if (!awayName || !homeName) return;
-
-    try {
-      await refreshLiveRedditForMatch(nbaService, awayName, homeName);
-    } catch (error) {
-      console.error('Failed to refresh Reddit data:', error);
-    }
+  function isFinalGame(): boolean {
+    const name = (payload?.status?.name ?? '').toUpperCase();
+    const short = (payload?.status?.short ?? '').toUpperCase();
+    return name.includes('FINAL') || short.includes('FINAL');
   }
 
   async function prewarmRedditForCurrentGame() {
@@ -61,22 +170,23 @@
 
     redditPrewarmedForGame = true;
     try {
-      const [liveThread, postThread] = await Promise.all([
-        nbaService.searchRedditThread({
-          type: 'live',
-          awayCandidates: [awayName],
-          homeCandidates: [homeName],
-          eventDate,
-          eventId
-        }),
-        nbaService.searchRedditThread({
-          type: 'post',
-          awayCandidates: [awayName],
-          homeCandidates: [homeName],
-          eventDate,
-          eventId
-        })
-      ]);
+      const liveThread = await nbaService.searchRedditThread({
+        type: 'live',
+        awayCandidates: [awayName],
+        homeCandidates: [homeName],
+        eventDate,
+        eventId
+      });
+
+      const postThread = isFinalGame()
+        ? await nbaService.searchRedditThread({
+            type: 'post',
+            awayCandidates: [awayName],
+            homeCandidates: [homeName],
+            eventDate,
+            eventId
+          })
+        : null;
 
       const warmers: Promise<any>[] = [];
       if (liveThread?.post?.id) {
@@ -98,14 +208,14 @@
     if (!payload) {
       refresh();
     }
-    interval = setInterval(refresh, 15000);
+    syncLiveFromScoreboard();
+    interval = setInterval(refresh, 30000);
+    scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
     
-    // Continue with periodic refresh
-    redditInterval = setInterval(refreshRedditData, 30000); // Refresh Reddit every 30 seconds
   });
   onDestroy(() => {
     if (interval) clearInterval(interval);
-    if (redditInterval) clearInterval(redditInterval);
+    if (scoreboardInterval) clearInterval(scoreboardInterval);
   });
   
   
@@ -131,7 +241,7 @@
   }
 </script>
 
-<div class="p-4">
+<div class="p-4 min-h-screen flex flex-col">
   <button class="text-white/70 hover:text-white" on:click={() => history.back()}>Back</button>
   <div class="mt-2 mb-2 min-h-[60px] swipe-area">
     {#if payload?.linescores}
@@ -170,11 +280,13 @@
   {#if payload?.error && !payload?.linescores}
     <div class="text-red-400">{payload.error}</div>
   {:else if payload?.linescores}
-    <BoxScoreToggle players={payload.players} linescores={payload.linescores}>
-      <div slot="reddit" let:mode let:side>
-        <RedditFeedClient awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} eventDate={payload?.eventDate} eventId={payload?.id || data.id} {mode} />
-      </div>
-    </BoxScoreToggle>
+    <div class="flex-1 min-h-[40vh]">
+      <BoxScoreToggle players={payload.players} linescores={payload.linescores} initialMode={uiMode} initialSide={uiSide} onViewStateChange={handleViewStateChange}>
+        <div slot="reddit" let:mode let:side>
+          <RedditFeedClient awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} eventDate={payload?.eventDate} eventId={payload?.id || data.id} initialSourceLive={uiSourceLive} initialSourcePost={uiSourcePost} onSourceChange={handleSourceChange} {mode} />
+        </div>
+      </BoxScoreToggle>
+    </div>
   {:else}
     <div class="flex items-center justify-center py-8">
       <div class="animate-spin w-8 h-8 border-4 border-white/10 border-t-white/70 rounded-full"></div>

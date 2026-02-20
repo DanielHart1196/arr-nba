@@ -5,7 +5,7 @@ export interface INBATransformer {
 }
 
 export interface INBADataSource {
-  getScoreboard(date?: string): Promise<any>;
+  getScoreboard(date?: string, forceRefresh?: boolean): Promise<any>;
   getSummary(eventId: string): Promise<any>;
 }
 

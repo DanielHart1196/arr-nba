@@ -31,12 +31,16 @@ export class NBAService {
     this.redditService = new RedditService(redditDataSource, redditTransformer, apiCache);
   }
 
-  async getScoreboard(date?: string): Promise<ScoreboardResponse> {
-    return this.nbaService.getScoreboard(date);
+  async getScoreboard(date?: string, forceRefresh: boolean = false): Promise<ScoreboardResponse> {
+    return this.nbaService.getScoreboard(date, forceRefresh);
   }
 
   async getBoxscore(eventId: string): Promise<BoxscoreResponse> {
     return this.nbaService.getBoxscore(eventId);
+  }
+
+  getCachedBoxscore(eventId: string): BoxscoreResponse | null {
+    return this.nbaService.getCachedBoxscore(eventId);
   }
 
   async getRedditIndex(): Promise<RedditThreadMapping> {
@@ -45,6 +49,10 @@ export class NBAService {
 
   async searchRedditThread(request: RedditSearchRequest): Promise<RedditSearchResponse> {
     return this.redditService.searchRedditThread(request);
+  }
+
+  async searchSubredditThread(subreddit: string, request: RedditSearchRequest): Promise<RedditSearchResponse> {
+    return this.redditService.searchSubredditThread(subreddit, request);
   }
 
   getCachedThreadForEvent(eventId: string, type: 'live' | 'post') {

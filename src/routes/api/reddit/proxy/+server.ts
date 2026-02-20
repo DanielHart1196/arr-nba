@@ -29,12 +29,20 @@ export const GET: RequestHandler = async ({ url }) => {
       console.error(`Vercel Bridge Proxy Error: ${response.status} for ${targetUrl}`);
       return new Response(await response.text(), { 
         status: response.status,
-        headers: { 'content-type': 'text/plain' }
+        headers: {
+          'content-type': 'text/plain',
+          'cache-control': 'no-store'
+        }
       });
     }
 
     const data = await response.json();
-    return json(data);
+    const ttlSeconds = targetUrl.includes('/comments/') ? 30 : 60;
+    return json(data, {
+      headers: {
+        'cache-control': `public, max-age=20, s-maxage=${ttlSeconds}, stale-while-revalidate=${ttlSeconds * 10}`
+      }
+    });
   } catch (err) {
     console.error('Vercel Bridge Proxy Exception:', err);
     throw error(500, 'Bridge failed to fetch');

@@ -1,5 +1,10 @@
 import { expandTeamNames } from '../../../../lib/utils/team-matching.utils';
 
+const NO_STORE_HEADERS = {
+  'content-type': 'application/json',
+  'cache-control': 'no-store'
+};
+
 export const GET = async ({ url }: any) => {
   const awayTeam = url.searchParams.get('away') || '';
   const homeTeam = url.searchParams.get('home') || '';
@@ -22,6 +27,6 @@ export const GET = async ({ url }: any) => {
     expandedHome,
     query
   }), {
-    headers: { 'content-type': 'application/json' }
+    headers: NO_STORE_HEADERS
   });
 };

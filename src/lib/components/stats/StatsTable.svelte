@@ -6,6 +6,10 @@
   const statCols = [
     'MIN', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'OREB', 'DREB', 'FGM', 'FGA', 'FG%', '3PM', '3PA', '3P%', 'FTM', 'FTA', 'FT%', 'PF', 'TO', '+/-'
   ];
+  const statLabels: Record<string, string> = {
+    OREB: 'OR',
+    DREB: 'DR'
+  };
   const percentKeys = ['FG%', '3P%', 'FT%'] as const;
   const baseTotalKeys = statCols.filter((k) => k !== 'MIN' && k !== '+/-' && !percentKeys.includes(k as (typeof percentKeys)[number]));
 
@@ -61,7 +65,7 @@
   $: totalsByKey = buildTotals(safePlayers);
   $: formattedLongest = Math.max(...displayRows.map((r) => r.displayName.length), 6);
   $: nameColWidth = `${Math.min(formattedLongest, 13)}ch`;
-  $: statColWidth = '2.2rem';
+  $: statColWidth = '2rem';
 </script>
 
 <div class="border border-white/10 rounded text-xs scroll-container stats-table-container">
@@ -76,7 +80,7 @@
     <div class="overflow-x-auto" data-scrollable="true">
       <div class="grid border-b-2 border-white/20" style="width:max-content; grid-template-columns: repeat({statCols.length}, {statColWidth})">
         {#each statCols as k}
-          <div class="py-1 text-center font-semibold">{k}</div>
+          <div class="py-1 text-center font-semibold">{statLabels[k] ?? k}</div>
         {/each}
       </div>
       {#each displayRows as row, i}
