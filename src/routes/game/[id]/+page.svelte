@@ -5,9 +5,10 @@
   import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
   import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
-  import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyle } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
+  type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' };
   
   export let data: { id: string; streamed?: { payload?: Promise<BoxscoreResponse> } };
   let payload: BoxscoreResponse | null = nbaService.getCachedBoxscore(data.id);
@@ -19,6 +20,12 @@
   let uiSide: 'home' | 'away' = 'away';
   let uiSourceLive: 'reddit' | 'away' | 'home' = 'reddit';
   let uiSourcePost: 'reddit' | 'away' | 'home' = 'reddit';
+  let showHighlightsInsteadOfStream = false;
+  let youtubeHighlightSources: StreamSource[] = [];
+  let youtubeHighlightsKey = '';
+  let youtubeHighlightsLoading = false;
+  const FINAL_HIGHLIGHTS_DELAY_MS = 5 * 60 * 1000;
+  const ESTIMATED_GAME_DURATION_MS = 4 * 60 * 60 * 1000;
   const placeholderStreams = [
     { label: 'Feed A', url: 'https://sharkstreams.net/player.php?channel=1353' },
     { label: 'Feed B', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4' }
@@ -165,6 +172,60 @@
     return name.includes('FINAL') || short.includes('FINAL');
   }
 
+  function buildYouTubeQuery(): string {
+    const awayName = payload?.linescores?.away?.team?.displayName;
+    const homeName = payload?.linescores?.home?.team?.displayName;
+    const eventDate = payload?.eventDate;
+    const datePart = eventDate ? new Date(eventDate).toISOString().slice(0, 10) : '';
+    return [awayName, 'vs', homeName, 'full game highlights', 'nba', datePart].filter(Boolean).join(' ');
+  }
+
+  function buildYouTubeEmbedVideoUrl(videoId: string): string {
+    const params = new URLSearchParams({
+      rel: '0',
+      modestbranding: '1',
+      playsinline: '1'
+    });
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      params.set('origin', window.location.origin);
+    }
+    return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
+  }
+
+  async function loadYouTubeHighlightsForCurrentGame(): Promise<void> {
+    const query = buildYouTubeQuery();
+    if (!query) return;
+    if (youtubeHighlightsLoading) return;
+    if (youtubeHighlightsKey === query && youtubeHighlightSources.length > 0) return;
+
+    youtubeHighlightsLoading = true;
+    try {
+      const response = await fetch(`/api/highlights/nba?query=${encodeURIComponent(query)}&limit=8`);
+      if (!response.ok) return;
+      const json = await response.json();
+      const videos = Array.isArray(json?.videos) ? json.videos : [];
+      const nextSources = videos
+        .filter((item: any) => typeof item?.id === 'string' && item.id.length > 0)
+        .map((item: any, index: number) => ({
+          label: String(item?.title || `YouTube Highlight ${index + 1}`),
+          url: buildYouTubeEmbedVideoUrl(String(item.id)),
+          mode: 'embed' as const
+        }));
+      if (nextSources.length > 0) {
+        youtubeHighlightSources = nextSources;
+        youtubeHighlightsKey = query;
+      }
+    } catch (error) {
+      console.error('Failed to load YouTube highlights:', error);
+    } finally {
+      youtubeHighlightsLoading = false;
+    }
+  }
+
+  function buildPostGameHighlightSources() {
+    return youtubeHighlightSources;
+  }
+
   async function prewarmRedditForCurrentGame() {
     if (redditPrewarmedForGame) return;
     const awayName = payload?.linescores?.away?.team?.displayName;
@@ -251,10 +312,37 @@
   $: if (payload?.linescores?.away?.team?.displayName && payload?.linescores?.home?.team?.displayName) {
     prewarmRedditForCurrentGame();
   }
+
+  $: if (showHighlightsInsteadOfStream && payload?.linescores?.away?.team?.displayName && payload?.linescores?.home?.team?.displayName) {
+    loadYouTubeHighlightsForCurrentGame();
+  }
+
+  $: {
+    if (!isFinalGame()) {
+      showHighlightsInsteadOfStream = false;
+    } else {
+      const startMs = Date.parse(payload?.eventDate ?? '');
+      if (!Number.isFinite(startMs)) {
+        showHighlightsInsteadOfStream = false;
+      } else {
+        const cutoffMs = startMs + ESTIMATED_GAME_DURATION_MS + FINAL_HIGHLIGHTS_DELAY_MS;
+        showHighlightsInsteadOfStream = Date.now() >= cutoffMs;
+      }
+    }
+  }
 </script>
 
 <div class="p-4 min-h-screen flex flex-col">
-  <StreamOverlay title="Game Stream (Placeholder)" sources={placeholderStreams} storageKey={`arrnba.streamOverlay.${data.id}`} />
+  {#if showHighlightsInsteadOfStream}
+    <StreamOverlay
+      title="Game Highlights"
+      sources={buildPostGameHighlightSources()}
+      storageKey={`arrnba.highlightsOverlay.${data.id}`}
+      closedButtonLabel="Open Highlights"
+    />
+  {:else}
+    <StreamOverlay title="Game Stream (Placeholder)" sources={placeholderStreams} storageKey={`arrnba.streamOverlay.${data.id}`} />
+  {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
     <button class="text-white/70 hover:text-white justify-self-start" on:click={() => history.back()}>Back</button>
     <div class="text-center text-sm text-white/75 font-medium">{formatHeaderDate(payload?.eventDate)}</div>
@@ -265,9 +353,10 @@
       <div class="flex items-center justify-between text-lg font-semibold">
         <div class="flex items-center gap-2">
           <img
-            src={`/logos/${getTeamLogoAbbr(payload?.linescores?.away?.team)}.svg`}
+            src={getTeamLogoPath(payload?.linescores?.away?.team)}
             alt="away"
             width="28" height="28" loading="eager" decoding="async"
+            style={getTeamLogoScaleStyle(payload?.linescores?.away?.team)}
             on:error={hideBrokenImage}
           />
           <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
@@ -276,9 +365,10 @@
         <div class="flex items-center gap-2">
           <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
           <img
-            src={`/logos/${getTeamLogoAbbr(payload?.linescores?.home?.team)}.svg`}
+            src={getTeamLogoPath(payload?.linescores?.home?.team)}
             alt="home"
             width="28" height="28" loading="eager" decoding="async"
+            style={getTeamLogoScaleStyle(payload?.linescores?.home?.team)}
             on:error={hideBrokenImage}
           />
         </div>
@@ -310,4 +400,3 @@
     </div>
   {/if}
 </div>
-

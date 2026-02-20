@@ -56,6 +56,11 @@ export interface BoxscoreResponse {
   id: string;
   eventDate?: string;
   boxscore?: any;
+  highlights?: {
+    label: string;
+    url: string;
+    mode?: 'auto' | 'video' | 'embed';
+  }[];
   players: {
     home: Player[];
     away: Player[];

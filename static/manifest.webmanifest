@@ -3,7 +3,7 @@
   "short_name": "arr-nba",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#000000",
   "theme_color": "#000000",
   "description": "Fast NBA scoreboard, box scores, and Reddit game threads.",

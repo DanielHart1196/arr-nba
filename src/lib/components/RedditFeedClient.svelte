@@ -1,6 +1,7 @@
 <script lang="ts">
   import { nbaService } from '../services/nba.service';
   import { createPairKey, formatTimeAgo } from '../utils/reddit.utils';
+  import { getTeamLogoPathByAbbr, getTeamLogoScaleByAbbr } from '../utils/team.utils';
   import type { RedditComment, RedditPost } from '../types/nba';
 
   type FeedMode = 'LIVE' | 'POST';
@@ -481,6 +482,12 @@
     const sort: SortChoice = currentMode === 'POST' ? 'top' : 'new';
     await fetchCommentsFor(post, sort, currentMode, currentSource, true);
   }
+
+  function getPickerLogoStyle(abbr: string): string {
+    const scale = getTeamLogoScaleByAbbr(abbr, 1.12);
+    const sizeRem = 2 * scale; // Base picker logo size is 2rem (h-8/w-8)
+    return `width:${sizeRem}rem;height:${sizeRem}rem;display:block;object-position:center center;flex-shrink:0;`;
+  }
 </script>
 
 <div class="min-w-0 overflow-x-hidden">
@@ -525,7 +532,7 @@
         on:click={() => handleSourceClick('away')}
       >
         {#if awayLogoAbbr}
-          <img src={`/logos/${awayLogoAbbr}.svg`} alt={awaySourceLabel} class="h-8 w-8 object-contain" style="transform: scale(1.12);" loading="lazy" decoding="async" />
+          <img src={getTeamLogoPathByAbbr(awayLogoAbbr)} alt={awaySourceLabel} class="object-contain" style={getPickerLogoStyle(awayLogoAbbr)} loading="lazy" decoding="async" />
         {:else}
           <span class="text-[10px] text-white/80">{awaySourceLabel}</span>
         {/if}
@@ -538,7 +545,7 @@
         on:click={() => handleSourceClick('home')}
       >
         {#if homeLogoAbbr}
-          <img src={`/logos/${homeLogoAbbr}.svg`} alt={homeSourceLabel} class="h-8 w-8 object-contain" style="transform: scale(1.12);" loading="lazy" decoding="async" />
+          <img src={getTeamLogoPathByAbbr(homeLogoAbbr)} alt={homeSourceLabel} class="object-contain" style={getPickerLogoStyle(homeLogoAbbr)} loading="lazy" decoding="async" />
         {:else}
           <span class="text-[10px] text-white/80">{homeSourceLabel}</span>
         {/if}

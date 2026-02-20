@@ -2,8 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { nbaService } from '../lib/services/nba.service';
-  import { getTeamLogoAbbr } from '../lib/utils/team.utils';
-  import { addDays, isEventOnDate, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyleByAbbr } from '../lib/utils/team.utils';
+  import { addDays, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
   import { createTouchGestures } from '../lib/composables/touch-gestures';
   import type { Event as NBAEvent } from '../lib/types/nba';
 
@@ -31,10 +31,11 @@
   const SWIPE_ANIM_MS = 120;
 
   const SCHEDULE_PREFETCH_KEY = 'arrnba.schedulePrefetch.v2';
-  const PREFETCH_PAST_DAYS = 5;
-  const PREFETCH_FUTURE_DAYS = 5;
-  const PREFETCH_CONCURRENCY = 2;
+  const PREFETCH_PAST_DAYS = 2;
+  const PREFETCH_FUTURE_DAYS = 2;
+  const PREFETCH_CONCURRENCY = 1;
   const PREFETCH_CHUNK_PAUSE_MS = 120;
+  const CACHE_HYDRATE_WINDOW_DAYS = 7;
 
   const baseDate = new Date();
   baseDate.setHours(0, 0, 0, 0);
@@ -105,24 +106,15 @@
     }
   }
 
-  function getMergedCachedEventsForDate(date: Date): NBAEvent[] | null {
-    const targetDateStr = date.toDateString();
-    const fromPrev = readCachedScoreboardEvents(addDays(date, -1)) ?? [];
-    const fromCurrent = readCachedScoreboardEvents(date) ?? [];
-    const fromNext = readCachedScoreboardEvents(addDays(date, 1)) ?? [];
-    if (fromPrev.length === 0 && fromCurrent.length === 0 && fromNext.length === 0) return null;
-    return mergeUniqueAndSortEvents(
-      [...fromPrev, ...fromNext, ...fromCurrent].filter((event) => isEventOnDate(event, targetDateStr))
-    );
-  }
-
-  function hydrateAllDaysFromBrowserCache(seed: Record<number, NBAEvent[]>): Record<number, NBAEvent[]> {
+  function hydrateNearbyDaysFromBrowserCache(seed: Record<number, NBAEvent[]>, centerIndex: number): Record<number, NBAEvent[]> {
     if (typeof window === 'undefined') return seed;
     const next: Record<number, NBAEvent[]> = { ...seed };
-    for (let i = 0; i < TOTAL_DAYS; i++) {
+    const start = clampIndex(centerIndex - CACHE_HYDRATE_WINDOW_DAYS);
+    const end = clampIndex(centerIndex + CACHE_HYDRATE_WINDOW_DAYS);
+    for (let i = start; i <= end; i++) {
       if (next[i]) continue;
-      const merged = getMergedCachedEventsForDate(getDateForIndex(i));
-      if (merged) next[i] = merged;
+      const cached = readCachedScoreboardEvents(getDateForIndex(i));
+      if (cached) next[i] = cached;
     }
     return next;
   }
@@ -145,7 +137,7 @@
   const initialSeedEvents: Record<number, NBAEvent[]> = restoredInitialEvents
     ? { [initialIndex]: restoredInitialEvents }
     : (initialIndex === START_INDEX ? { [initialIndex]: data.events ?? [] } : {});
-  let dayEvents: Record<number, NBAEvent[]> = hydrateAllDaysFromBrowserCache(initialSeedEvents);
+  let dayEvents: Record<number, NBAEvent[]> = hydrateNearbyDaysFromBrowserCache(initialSeedEvents, initialIndex);
   let currentDisplayEvents: NBAEvent[] = dayEvents[initialIndex] ?? [];
   let dayLoading = new Set<number>();
 
@@ -189,25 +181,9 @@
     return Math.round((b - a) / DAY_MS);
   }
 
-  async function fetchMergedEventsForDate(date: Date, forceRefresh = false): Promise<NBAEvent[]> {
-    const targetDateStr = date.toDateString();
-    const prevDay = addDays(date, -1);
-    const nextDay = addDays(date, 1);
-    const isOnTargetDay = (event: NBAEvent) => isEventOnDate(event, targetDateStr);
-
+  async function fetchEventsForDate(date: Date, forceRefresh = false): Promise<NBAEvent[]> {
     const response = await nbaService.getScoreboard(toScoreboardDateKey(date), forceRefresh);
-    const fromCurrent = (response.events ?? []).filter(isOnTargetDay);
-    if (forceRefresh && fromCurrent.length > 0) {
-      return mergeUniqueAndSortEvents(fromCurrent);
-    }
-
-    const [prevResponse, nextResponse] = await Promise.all([
-      nbaService.getScoreboard(toScoreboardDateKey(prevDay), forceRefresh),
-      nbaService.getScoreboard(toScoreboardDateKey(nextDay), forceRefresh)
-    ]);
-    const fromPrev = (prevResponse.events ?? []).filter(isOnTargetDay);
-    const fromNext = (nextResponse.events ?? []).filter(isOnTargetDay);
-    return mergeUniqueAndSortEvents([...fromPrev, ...fromNext, ...fromCurrent]);
+    return mergeUniqueAndSortEvents(response.events ?? []);
   }
 
   function isTodaySelected(): boolean {
@@ -224,7 +200,7 @@
     dayLoading = new Set(dayLoading);
     try {
       const date = getDateForIndex(safeIndex);
-      const merged = await fetchMergedEventsForDate(date, force);
+      const merged = await fetchEventsForDate(date, force);
 
       const lastApplied = latestAppliedSeqByIndex.get(safeIndex) ?? 0;
       if (requestSeq < lastApplied) return;
@@ -248,10 +224,8 @@
     }
   }
 
-  function prefetchAround(index: number) {
-    loadDay(index).catch(() => {});
-    loadDay(index - 1).catch(() => {});
-    loadDay(index + 1).catch(() => {});
+  function prefetchNeighbor(index: number, direction: -1 | 1) {
+    loadDay(index + direction).catch(() => {});
   }
 
   function buildPrefetchDateKeys(anchor: Date) {
@@ -291,6 +265,7 @@
 
   function snapToIndex(index: number) {
     const nextIndex = clampIndex(index);
+    const previousIndex = currentIndex;
     if (nextIndex === currentIndex) {
       isDragging = false;
       dragOffsetPx = 0;
@@ -311,7 +286,9 @@
     if (dayEvents[nextIndex]) {
       saveDayEventsForIndex(nextIndex, dayEvents[nextIndex]);
     }
-    prefetchAround(nextIndex);
+    loadDay(nextIndex).catch(() => {});
+    const direction: -1 | 1 = nextIndex > previousIndex ? 1 : -1;
+    prefetchNeighbor(nextIndex, direction);
 
     trackAnimationTimer = setTimeout(() => {
       trackAnimating = false;
@@ -498,8 +475,8 @@
       event,
       awayAbbr,
       homeAbbr,
-      awayLogo: `/logos/${awayAbbr}.svg`,
-      homeLogo: `/logos/${homeAbbr}.svg`,
+      awayLogo: getTeamLogoPath(away?.team),
+      homeLogo: getTeamLogoPath(home?.team),
       awayScore: away?.score ?? 0,
       homeScore: home?.score ?? 0,
       statusText: scheduled ? formatLocalTime(event.date) : (event?.competitions?.[0]?.status?.type?.shortDetail ?? ''),
@@ -672,11 +649,31 @@
                 {#each cardsForEvents(currentDisplayEvents) as game (game.id)}
                   <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:pointerdown={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} on:pointerup={() => openGame(game.id)} on:click|preventDefault={() => openGame(game.id)} class="block border rounded p-3 {isCloseGame(game.event) ? 'border-red-500/80 hover:border-red-400' : 'border-white/10 hover:border-white/20'}" style="touch-action: manipulation;">
                     <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
-                      <div class="row-span-2 justify-self-center"><img src={game.awayLogo} alt="away" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                      <div class="row-span-2 justify-self-center h-12 w-12 flex items-center justify-center overflow-hidden">
+                        <img
+                          src={game.awayLogo}
+                          alt="away"
+                          class="h-12 w-12 object-contain"
+                          loading="lazy"
+                          decoding="async"
+                          style={getTeamLogoScaleStyleByAbbr(game.awayAbbr)}
+                          on:error={hideBrokenImage}
+                        />
+                      </div>
                       <div class="text-center font-medium">{game.awayAbbr}</div>
                       <div class="text-center text-white/70 font-medium">@</div>
                       <div class="text-center font-medium">{game.homeAbbr}</div>
-                      <div class="row-span-2 justify-self-center"><img src={game.homeLogo} alt="home" width="48" height="48" loading="lazy" decoding="async" on:error={hideBrokenImage} /></div>
+                      <div class="row-span-2 justify-self-center h-12 w-12 flex items-center justify-center overflow-hidden">
+                        <img
+                          src={game.homeLogo}
+                          alt="home"
+                          class="h-12 w-12 object-contain"
+                          loading="lazy"
+                          decoding="async"
+                          style={getTeamLogoScaleStyleByAbbr(game.homeAbbr)}
+                          on:error={hideBrokenImage}
+                        />
+                      </div>
                       <div class="text-center">{(game.scheduled || hideScores) ? '-' : game.awayScore}</div>
                       <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>
                       <div class="text-center">{(game.scheduled || hideScores) ? '-' : game.homeScore}</div>

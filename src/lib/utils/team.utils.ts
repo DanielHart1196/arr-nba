@@ -42,6 +42,44 @@ export function getTeamLogoAbbr(team: Team): string {
   return nameMap[name] || ab || '';
 }
 
+export function getTeamLogoPath(team: Team): string {
+  return getTeamLogoPathByAbbr(getTeamLogoAbbr(team));
+}
+
+export function getTeamLogoPathByAbbr(abbr: string): string {
+  const normalized = (abbr || '').toUpperCase();
+  if (!normalized) return '';
+  const pngByAbbr: Record<string, string> = {
+    SAS: '/logos/SAS.png',
+    HOU: '/logos/HOU.png',
+    UTA: '/logos/UTA.png'
+  };
+  if (pngByAbbr[normalized]) return pngByAbbr[normalized];
+  return `/logos/${normalized}.svg`;
+}
+
+export function getTeamLogoScaleByAbbr(abbr: string, baseScale = 1): number {
+  const normalized = (abbr || '').toUpperCase();
+  const perTeamScale: Record<string, number> = {
+    DAL: 0.82,
+    HOU: 1.36,
+    LAC: 0.8,
+    ORL: 0.9,
+    SAC: 0.9,
+    SAS: 0.88,
+    UTA: 0.9
+  };
+  return baseScale * (perTeamScale[normalized] ?? 1);
+}
+
+export function getTeamLogoScaleStyleByAbbr(abbr: string, baseScale = 1): string {
+  return `transform: scale(${getTeamLogoScaleByAbbr(abbr, baseScale)});`;
+}
+
+export function getTeamLogoScaleStyle(team: Team, baseScale = 1): string {
+  return getTeamLogoScaleStyleByAbbr(getTeamLogoAbbr(team), baseScale);
+}
+
 export function formatTeamName(team: Team): string {
   return team?.shortDisplayName || team?.displayName || 'Unknown';
 }

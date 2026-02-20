@@ -7,11 +7,12 @@
   export let streamUrl = '';
   export let sources: StreamSource[] = [];
   export let storageKey = 'arrnba.streamOverlay.v1';
+  export let closedButtonLabel = 'Open Stream';
 
   let rootEl: HTMLDivElement | null = null;
   let videoEl: HTMLVideoElement | null = null;
 
-  let visible = true;
+  let visible = false;
   let minimized = false;
   let muted = true;
   let selectedIndex = 0;
@@ -98,7 +99,6 @@
         width?: number;
         selectedIndex?: number;
       };
-      visible = parsed.visible ?? visible;
       minimized = parsed.minimized ?? minimized;
       muted = parsed.muted ?? muted;
       x = Number.isFinite(parsed.x) ? Number(parsed.x) : x;
@@ -289,9 +289,7 @@
               src={activeUrl}
               class="h-full w-full bg-black"
               title={titleText}
-              allow="autoplay; fullscreen; picture-in-picture"
-              referrerpolicy="no-referrer"
-              allowfullscreen
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
             ></iframe>
           {/if}
         {:else}
@@ -314,6 +312,6 @@
     class="fixed bottom-3 right-3 z-50 rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
     on:click={toggleVisible}
   >
-    Open Stream
+    {closedButtonLabel}
   </button>
 {/if}
