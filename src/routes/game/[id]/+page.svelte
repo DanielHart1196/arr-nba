@@ -61,8 +61,8 @@
     }
   }
 
-  function buildStreamWindowUrl(): string {
-    const source = dynamicStreams[0] ?? placeholderStreams[0];
+  function buildStreamWindowUrl(sourceOverride?: StreamSource | null): string {
+    const source = sourceOverride ?? dynamicStreams[0] ?? placeholderStreams[0];
     const basePath = `/stream/${data.id}`;
     if (typeof window === 'undefined') return basePath;
     const next = new URL(basePath, window.location.origin);
@@ -90,9 +90,14 @@
     });
   }
 
-  function openStreamWindow(): void {
+  async function openStreamWindow(): Promise<void> {
     if (typeof window === 'undefined') return;
-    window.open(streamWindowUrl, '_blank', 'noopener,noreferrer');
+    if (dynamicStreams.length === 0 && !streamsLoading) {
+      await findGameStream();
+    }
+    const nextUrl = buildStreamWindowUrl(dynamicStreams[0] ?? placeholderStreams[0]);
+    const absolute = new URL(nextUrl, window.location.origin).toString();
+    window.open(absolute, '_blank', 'noopener,noreferrer');
   }
 
   $: streamOverlayStore.updateIfActive(data.id, {

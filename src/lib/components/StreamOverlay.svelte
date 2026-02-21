@@ -876,19 +876,33 @@
     window.open(url, '_blank', 'noopener,noreferrer');
   }
 
+  function resolveExternalUrl(url: string): string {
+    if (!url) return url;
+    const trimmed = url.trim();
+    if (!trimmed) return trimmed;
+    if (trimmed.includes('://') || trimmed.startsWith('mailto:') || trimmed.startsWith('tel:')) return trimmed;
+    if (typeof window === 'undefined') return trimmed;
+    try {
+      return new URL(trimmed, window.location.origin).toString();
+    } catch {
+      return trimmed;
+    }
+  }
+
   function openExternal(url: string): void {
-    console.log('[stream][overlay] openExternal start', { url, isMobile: isMobileDevice() });
-    if (!url) return;
-    const id = extractYouTubeVideoId(url);
+    const resolvedUrl = resolveExternalUrl(url);
+    console.log('[stream][overlay] openExternal start', { url: resolvedUrl, isMobile: isMobileDevice() });
+    if (!resolvedUrl) return;
+    const id = extractYouTubeVideoId(resolvedUrl);
     if (!id) {
       console.log('[stream][overlay] openExternal non-youtube');
       if (isMobileDevice()) {
         console.log('[stream][overlay] trying firefox');
-        tryOpenInFirefox(url);
+        tryOpenInFirefox(resolvedUrl);
         return;
       }
       console.log('[stream][overlay] opening new tab (web non-youtube)');
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
       return;
     }
 
