@@ -1,7 +1,20 @@
+<script context="module" lang="ts">
+  interface PersistedUIState {
+    cache: unknown;
+    selectedSourceByMode: unknown;
+    collapsedByView: Record<string, Record<string, true>>;
+    scrollYByView: Record<string, number>;
+  }
+
+  const uiStateByEventId = new Map<string, PersistedUIState>();
+</script>
+
 <script lang="ts">
+  import { onMount, onDestroy, tick } from 'svelte';
   import { nbaService } from '../services/nba.service';
-  import { createPairKey, formatTimeAgo } from '../utils/reddit.utils';
+  import { createPairKey } from '../utils/reddit.utils';
   import { getTeamLogoPathByAbbr, getTeamLogoScaleByAbbr } from '../utils/team.utils';
+  import RedditCommentNode from './RedditCommentNode.svelte';
   import type { RedditComment, RedditPost } from '../types/nba';
 
   type FeedMode = 'LIVE' | 'POST';
@@ -41,11 +54,19 @@
     LIVE: { reddit: false, away: false, home: false },
     POST: { reddit: false, away: false, home: false }
   };
+  let lastFetchAttemptAt: Record<FeedMode, Record<ThreadSource, number>> = {
+    LIVE: { reddit: 0, away: 0, home: 0 },
+    POST: { reddit: 0, away: 0, home: 0 }
+  };
+  const THREAD_RETRY_COOLDOWN_MS = 8000;
   let selectedSourceByMode: Record<FeedMode, ThreadSource> = {
     LIVE: initialSourceLive,
     POST: initialSourcePost
   };
   let commentsRequestSeq = 0;
+  let collapsedByView: Record<string, Record<string, true>> = {};
+  let scrollYByView: Record<string, number> = {};
+  let activeViewKey = '';
 
   function emptyModeCache(): ModeCache {
     return { thread: null, comments: [] };
@@ -63,6 +84,88 @@
     LIVE: emptySourceCache(),
     POST: emptySourceCache()
   };
+
+  function deepClone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function makeViewKey(targetMode: FeedMode, targetSource: ThreadSource): string {
+    return `${targetMode}:${targetSource}`;
+  }
+
+  function buildCollapsedMap(nodes: RedditComment[]): Record<string, true> {
+    const out: Record<string, true> = {};
+    const visit = (items: RedditComment[]) => {
+      for (const item of items ?? []) {
+        const id = String(item?.id ?? '');
+        if (id && item?._collapsed) out[id] = true;
+        if (item?.replies?.length) visit(item.replies);
+      }
+    };
+    visit(nodes ?? []);
+    return out;
+  }
+
+  function applyCollapsedMap(nodes: RedditComment[], collapsed: Record<string, true>): void {
+    const visit = (items: RedditComment[]) => {
+      for (const item of items ?? []) {
+        const id = String(item?.id ?? '');
+        if (id && collapsed[id]) item._collapsed = true;
+        if (item?.replies?.length) visit(item.replies);
+      }
+    };
+    visit(nodes ?? []);
+  }
+
+  function syncCollapsedMapFor(targetMode: FeedMode, targetSource: ThreadSource): void {
+    const key = makeViewKey(targetMode, targetSource);
+    collapsedByView[key] = buildCollapsedMap(cache[targetMode][targetSource].comments ?? []);
+  }
+
+  function restorePersistedUIState(): void {
+    if (!eventId) return;
+    const persisted = uiStateByEventId.get(eventId);
+    if (!persisted) return;
+    cache = deepClone(persisted.cache) as CacheState;
+    selectedSourceByMode = deepClone(persisted.selectedSourceByMode) as Record<FeedMode, ThreadSource>;
+    collapsedByView = deepClone(persisted.collapsedByView);
+    scrollYByView = deepClone(persisted.scrollYByView);
+  }
+
+  function persistUIState(): void {
+    if (!eventId) return;
+    try {
+      syncCollapsedMapFor('LIVE', 'reddit');
+      syncCollapsedMapFor('LIVE', 'away');
+      syncCollapsedMapFor('LIVE', 'home');
+      syncCollapsedMapFor('POST', 'reddit');
+      syncCollapsedMapFor('POST', 'away');
+      syncCollapsedMapFor('POST', 'home');
+    } catch {}
+    uiStateByEventId.set(eventId, deepClone({
+      cache,
+      selectedSourceByMode,
+      collapsedByView,
+      scrollYByView
+    }));
+  }
+
+  function saveActiveViewScroll(): void {
+    if (typeof window === 'undefined' || !activeViewKey) return;
+    scrollYByView[activeViewKey] = window.scrollY || 0;
+  }
+
+  async function restoreScrollForView(viewKey: string): Promise<void> {
+    if (typeof window === 'undefined' || !viewKey) return;
+    const targetY = Number(scrollYByView[viewKey]);
+    if (!Number.isFinite(targetY)) return;
+    await tick();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: targetY, left: 0, behavior: 'auto' });
+      });
+    });
+  }
 
   function sourceThreadStorageKey(targetMode: FeedMode, targetSource: ThreadSource): string {
     return `arrnba:thread:${eventId || 'unknown'}:${targetMode}:${targetSource}`;
@@ -94,10 +197,22 @@
   $: currentSource = currentMode ? selectedSourceByMode[currentMode] : 'reddit';
   $: thread = currentMode ? cache[currentMode][currentSource].thread : null;
   $: comments = currentMode ? cache[currentMode][currentSource].comments : [];
+  $: hasVisibleComments = (comments?.length ?? 0) > 0;
   $: awaySourceLabel = teamButtonLabel(awayName);
   $: homeSourceLabel = teamButtonLabel(homeName);
   $: awayLogoAbbr = resolveTeamLogoAbbr(awayName);
   $: homeLogoAbbr = resolveTeamLogoAbbr(homeName);
+
+  $: {
+    const nextViewKey = currentMode ? makeViewKey(currentMode, currentSource) : '';
+    if (nextViewKey === activeViewKey) {
+      // no-op
+    } else {
+      saveActiveViewScroll();
+      activeViewKey = nextViewKey;
+      if (activeViewKey) void restoreScrollForView(activeViewKey);
+    }
+  }
 
   async function fetchCommentsFor(
     post: RedditPost,
@@ -118,8 +233,10 @@
     try {
       const result = await nbaService.getRedditComments(post.id, sort, post.permalink, forceRefresh);
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
-
-      cache[targetMode][targetSource].comments = sortedCopy(result.comments ?? [], sortChoice);
+      const nextComments = sortedCopy(result.comments ?? [], sortChoice);
+      applyCollapsedMap(nextComments, collapsedByView[makeViewKey(targetMode, targetSource)] ?? {});
+      cache[targetMode][targetSource].comments = nextComments;
+      syncCollapsedMapFor(targetMode, targetSource);
       cache = { ...cache };
     } catch (error: unknown) {
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
@@ -138,8 +255,14 @@
     return tail.toUpperCase();
   }
 
+  function includesAliasTerm(teamName: string, alias: string): boolean {
+    const normalizedTeam = ` ${(teamName || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+    const normalizedAlias = ` ${(alias || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+    if (!normalizedTeam.trim() || !normalizedAlias.trim()) return false;
+    return normalizedTeam.includes(normalizedAlias);
+  }
+
   function resolveTeamSubreddit(teamName: string): string | null {
-    const name = (teamName || '').toLowerCase();
     const aliases: Array<[string, string]> = [
       ['hawks', 'AtlantaHawks'],
       ['celtics', 'bostonceltics'],
@@ -175,13 +298,12 @@
     ];
 
     for (const [match, subreddit] of aliases) {
-      if (name.includes(match)) return subreddit;
+      if (includesAliasTerm(teamName, match)) return subreddit;
     }
     return null;
   }
 
   function resolveTeamLogoAbbr(teamName: string): string {
-    const name = (teamName || '').toLowerCase();
     const aliases: Array<[string, string]> = [
       ['hawks', 'ATL'],
       ['celtics', 'BOS'],
@@ -217,7 +339,7 @@
     ];
 
     for (const [match, abbr] of aliases) {
-      if (name.includes(match)) return abbr;
+      if (includesAliasTerm(teamName, match)) return abbr;
     }
     return '';
   }
@@ -261,8 +383,17 @@
         return;
       }
 
+      if (
+        triedFetch[targetMode][targetSource] &&
+        !cache[targetMode][targetSource].thread &&
+        (Date.now() - (lastFetchAttemptAt[targetMode][targetSource] ?? 0)) >= THREAD_RETRY_COOLDOWN_MS
+      ) {
+        triedFetch[targetMode][targetSource] = false;
+      }
+
       if (!triedFetch[targetMode][targetSource]) {
         triedFetch[targetMode][targetSource] = true;
+        lastFetchAttemptAt[targetMode][targetSource] = Date.now();
         if (!cache[targetMode][targetSource].thread) loading = true;
 
         const result = await nbaService.searchRedditThread({
@@ -294,6 +425,7 @@
       void prefetchTeamSources(targetMode);
     } catch (error) {
       console.error(`Error ensuring ${targetMode} r/nba thread:`, error);
+      triedFetch[targetMode][targetSource] = false;
       if (mode === targetMode) loading = false;
     }
   }
@@ -307,6 +439,7 @@
     }
 
     triedFetch[targetMode][targetSource] = true;
+    lastFetchAttemptAt[targetMode][targetSource] = Date.now();
 
     try {
       const result = await nbaService.searchSubredditThread(subreddit, {
@@ -325,7 +458,10 @@
       if (!post?.id) return;
       const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
       const commentsResult = await nbaService.getRedditComments(post.id, sort, post.permalink);
-      cache[targetMode][targetSource].comments = sortedCopy(commentsResult.comments ?? [], sort);
+      const nextComments = sortedCopy(commentsResult.comments ?? [], sort);
+      applyCollapsedMap(nextComments, collapsedByView[makeViewKey(targetMode, targetSource)] ?? {});
+      cache[targetMode][targetSource].comments = nextComments;
+      syncCollapsedMapFor(targetMode, targetSource);
       cache = { ...cache };
     } catch (error) {
       console.warn(`Background prefetch failed for ${targetSource} source:`, error);
@@ -354,8 +490,17 @@
     if (existing) {
       cache[targetMode][targetSource].thread = existing;
       cache = { ...cache };
+      if (activeViewKey === makeViewKey(targetMode, targetSource)) void restoreScrollForView(activeViewKey);
       await fetchCommentsFor(existing, sort, targetMode, targetSource);
       return;
+    }
+
+    if (
+      triedFetch[targetMode][targetSource] &&
+      !cache[targetMode][targetSource].thread &&
+      (Date.now() - (lastFetchAttemptAt[targetMode][targetSource] ?? 0)) >= THREAD_RETRY_COOLDOWN_MS
+    ) {
+      triedFetch[targetMode][targetSource] = false;
     }
 
     if (triedFetch[targetMode][targetSource]) {
@@ -364,6 +509,7 @@
     }
 
     triedFetch[targetMode][targetSource] = true;
+    lastFetchAttemptAt[targetMode][targetSource] = Date.now();
     loading = true;
     errorMsg = '';
 
@@ -390,6 +536,7 @@
     } catch (error: unknown) {
       console.error(`Failed to load r/${subreddit} thread:`, error);
       errorMsg = error instanceof Error ? error.message : `Failed to load r/${subreddit} thread`;
+      triedFetch[targetMode][targetSource] = false;
       loading = false;
     }
   }
@@ -405,6 +552,7 @@
 
   async function handleSourceClick(source: ThreadSource): Promise<void> {
     if (!currentMode) return;
+    saveActiveViewScroll();
     const activeSource = selectedSourceByMode[currentMode];
     const activeThread = cache[currentMode][activeSource].thread;
 
@@ -429,28 +577,28 @@
   $: onSourceChange({ mode: 'LIVE', source: selectedSourceByMode.LIVE });
   $: onSourceChange({ mode: 'POST', source: selectedSourceByMode.POST });
 
-  function toggleTop(i: number): void {
-    if (!currentMode) return;
-    const comment = cache[currentMode][currentSource].comments?.[i];
-    if (!comment) return;
-    comment._collapsed = !comment._collapsed;
+  function toggleCommentById(id: string): void {
+    if (!currentMode || !id) return;
+    const comments = cache[currentMode][currentSource].comments ?? [];
+    let changed = false;
+    const visit = (nodes: RedditComment[]): boolean => {
+      for (const node of nodes ?? []) {
+        if (String(node?.id ?? '') === id) {
+          node._collapsed = !node._collapsed;
+          return true;
+        }
+        if (node?.replies?.length && visit(node.replies)) return true;
+      }
+      return false;
+    };
+    changed = visit(comments);
+    if (!changed) return;
+    syncCollapsedMapFor(currentMode, currentSource);
     cache = { ...cache };
   }
 
-  function toggleReply(i: number, j: number): void {
-    if (!currentMode) return;
-    const reply = cache[currentMode][currentSource].comments?.[i]?.replies?.[j];
-    if (!reply) return;
-    reply._collapsed = !reply._collapsed;
-    cache = { ...cache };
-  }
-
-  function toggleSub(i: number, j: number, k: number): void {
-    if (!currentMode) return;
-    const subReply = cache[currentMode][currentSource].comments?.[i]?.replies?.[j]?.replies?.[k];
-    if (!subReply) return;
-    subReply._collapsed = !subReply._collapsed;
-    cache = { ...cache };
+  function handleCommentToggle(event: CustomEvent<{ id: string }>): void {
+    toggleCommentById(event.detail?.id ?? '');
   }
 
   function sortedCopy(base: RedditComment[], choice: SortChoice): RedditComment[] {
@@ -472,13 +620,18 @@
   function reorder(): void {
     if (!currentMode) return;
     cache[currentMode][currentSource].comments = sortedCopy(cache[currentMode][currentSource].comments, sortChoice);
+    syncCollapsedMapFor(currentMode, currentSource);
     cache = { ...cache };
   }
   
   async function refreshComments(): Promise<void> {
     if (!currentMode) return;
     const post = cache[currentMode][currentSource].thread;
-    if (!post) return;
+    if (!post) {
+      triedFetch[currentMode][currentSource] = false;
+      await ensureActiveSourceLoaded(currentMode);
+      return;
+    }
     const sort: SortChoice = currentMode === 'POST' ? 'top' : 'new';
     await fetchCommentsFor(post, sort, currentMode, currentSource, true);
   }
@@ -488,6 +641,15 @@
     const sizeRem = 2 * scale; // Base picker logo size is 2rem (h-8/w-8)
     return `width:${sizeRem}rem;height:${sizeRem}rem;display:block;object-position:center center;flex-shrink:0;`;
   }
+
+  onMount(() => {
+    restorePersistedUIState();
+  });
+
+  onDestroy(() => {
+    saveActiveViewScroll();
+    persistUIState();
+  });
 </script>
 
 <div class="min-w-0 overflow-x-hidden">
@@ -552,57 +714,23 @@
       </button>
     </div>
   </div>
-  {#if loading}
+  {#if errorMsg}
+    <div class="bg-red-900/20 border border-red-500/40 rounded p-2 mb-3">
+      <div class="text-xs text-red-300/90">{errorMsg}</div>
+    </div>
+  {/if}
+  {#if loading && !hasVisibleComments}
     <div class="text-white/70 flex items-center gap-2">
       <div class="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></div>
       Loading comments...
-    </div>
-  {:else if errorMsg}
-    <div class="bg-red-900/20 border border-red-500/50 rounded p-3 mb-3">
-      <div class="text-red-400 font-semibold mb-1">Reddit Error</div>
-      <div class="text-sm text-red-300/80">{errorMsg}</div>
-      <button class="mt-2 text-xs underline text-red-400 hover:text-red-300" on:click={refreshComments}>Try again</button>
     </div>
   {:else if !thread}
     <div class="text-white/70">No comments yet.</div>
   {:else}
     <div class="space-y-3">
       {#each comments as c, i (c.id || i)}
-        <div role="button" tabindex="0" class="w-full text-left border border-white/10 rounded p-2 cursor-pointer" on:click={() => toggleTop(i)} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleTop(i); }}>
-          <div class="text-sm text-white/70">
-            {c.author} - {c.score} - {formatTimeAgo(c.created_utc)} {c._collapsed ? '- collapsed' : ''}
-          </div>
-          {#if !c._collapsed}
-            <div class="mt-1 whitespace-pre-wrap break-words">{c.body}</div>
-            {#if c.replies && c.replies.length}
-              <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
-                {#each c.replies as r, j (r.id || j)}
-                  <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleReply(i, j); }} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleReply(i, j); } }}>
-                    <div class="text-sm text-white/70">
-                      {r.author} - {r.score} - {formatTimeAgo(r.created_utc)} {r._collapsed ? '- collapsed' : ''}
-                    </div>
-                    {#if !r._collapsed}
-                      <div class="whitespace-pre-wrap break-words">{r.body}</div>
-                      {#if r.replies && r.replies.length}
-                        <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
-                          {#each r.replies as rr, k (rr.id || k)}
-                            <div role="button" tabindex="0" class="w-full text-left cursor-pointer" on:click={(e) => { e.stopPropagation(); toggleSub(i, j, k); }} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleSub(i, j, k); } }}>
-                              <div class="text-sm text-white/70">
-                                {rr.author} - {rr.score} - {formatTimeAgo(rr.created_utc)} {rr._collapsed ? '- collapsed' : ''}
-                              </div>
-                              {#if !rr._collapsed}
-                                <div class="whitespace-pre-wrap break-words">{rr.body}</div>
-                              {/if}
-                            </div>
-                          {/each}
-                        </div>
-                      {/if}
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {/if}
+        <div class="w-full text-left border border-white/10 rounded p-2">
+          <RedditCommentNode comment={c} on:toggle={handleCommentToggle} />
         </div>
       {/each}
     </div>

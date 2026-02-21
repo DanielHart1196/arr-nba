@@ -191,7 +191,7 @@ export class RedditTransformer {
         body: d?.body ?? '',
         created_utc: d?.created_utc ?? 0
       };
-      if (depth < 2 && d?.replies && typeof d.replies === 'object') {
+      if (d?.replies && typeof d.replies === 'object') {
         node.replies = this.toTree(d.replies, depth + 1);
       }
       nodes.push(node);

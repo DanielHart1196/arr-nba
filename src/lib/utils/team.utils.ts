@@ -62,7 +62,7 @@ export function getTeamLogoScaleByAbbr(abbr: string, baseScale = 1): number {
   const normalized = (abbr || '').toUpperCase();
   const perTeamScale: Record<string, number> = {
     DAL: 0.82,
-    HOU: 1.36,
+    HOU: 1.42,
     LAC: 0.8,
     ORL: 0.9,
     SAC: 0.9,

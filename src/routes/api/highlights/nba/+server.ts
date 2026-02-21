@@ -51,6 +51,7 @@ async function getOembedTitle(videoId: string): Promise<string | null> {
 export const GET: RequestHandler = async ({ url }) => {
   const query = (url.searchParams.get('query') || 'nba full game highlights').trim();
   const limit = parseLimit(url.searchParams.get('limit'));
+  console.log('[highlights][api] request', { query, limit });
 
   try {
     const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=EgIQAQ%253D%253D`;
@@ -62,6 +63,7 @@ export const GET: RequestHandler = async ({ url }) => {
       }
     });
     if (!searchResponse.ok) {
+      console.log('[highlights][api] youtube search non-ok', { query, status: searchResponse.status });
       return new Response(JSON.stringify({ videos: [], error: `youtube search failed: ${searchResponse.status}` }), {
         status: 200,
         headers: JSON_HEADERS
@@ -70,6 +72,11 @@ export const GET: RequestHandler = async ({ url }) => {
 
     const html = await searchResponse.text();
     const candidateIds = extractVideoIds(html, Math.max(limit * 4, 20));
+    console.log('[highlights][api] extracted candidate IDs', {
+      query,
+      count: candidateIds.length,
+      sample: candidateIds.slice(0, 5)
+    });
     const videos: Array<{ id: string; title: string }> = [];
 
     for (const id of candidateIds) {
@@ -82,11 +89,18 @@ export const GET: RequestHandler = async ({ url }) => {
       }
     }
 
+    console.log('[highlights][api] response videos', {
+      query,
+      count: videos.length,
+      sample: videos.slice(0, 3).map((v) => ({ id: v.id, title: v.title }))
+    });
+
     return new Response(JSON.stringify({ videos }), {
       status: 200,
       headers: JSON_HEADERS
     });
   } catch (error: any) {
+    console.log('[highlights][api] exception', { query, error: error?.message ?? 'unknown error' });
     return new Response(JSON.stringify({ videos: [], error: error?.message ?? 'unknown error' }), {
       status: 200,
       headers: JSON_HEADERS

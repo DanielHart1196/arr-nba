@@ -8,7 +8,7 @@
   import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyle } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
-  type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' };
+  type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
   
   export let data: { id: string; streamed?: { payload?: Promise<BoxscoreResponse> } };
   let payload: BoxscoreResponse | null = nbaService.getCachedBoxscore(data.id);
@@ -26,10 +26,64 @@
   let youtubeHighlightsLoading = false;
   const FINAL_HIGHLIGHTS_DELAY_MS = 5 * 60 * 1000;
   const ESTIMATED_GAME_DURATION_MS = 4 * 60 * 60 * 1000;
+ 
+  let dynamicStreams: StreamSource[] = [];
+  let streamsLoading = false;
+  let streamResolvedForGameId = '';
+  const STREAM_URL_TEMPLATE = 'https://cdn{index}.test.com/live/cdn{index}/chunks.m3u8';
   const placeholderStreams = [
-    { label: 'Feed A', url: 'https://sharkstreams.net/player.php?channel=1353' },
-    { label: 'Feed B', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4' }
+    { label: 'Stream (Fallback)', url: 'https://cdn1.test.com/live/cdn1/chunks.m3u8', mode: 'video' as const }
   ];
+
+  function buildTemplateStreamUrl(gameIndex: number): string {
+    const safeIndex = Math.max(1, Math.trunc(gameIndex));
+    return STREAM_URL_TEMPLATE.replaceAll('{index}', String(safeIndex));
+  }
+
+  async function resolveTemplateStreamForGame(): Promise<void> {
+    if (!payload?.id || !payload?.eventDate) return;
+    if (streamsLoading) return;
+    if (streamResolvedForGameId === payload.id) return;
+
+    streamsLoading = true;
+    try {
+      const date = new Date(payload.eventDate);
+      const keys = [
+        toScoreboardDateKey(new Date(date.getTime() - 24 * 60 * 60 * 1000)),
+        toScoreboardDateKey(date),
+        toScoreboardDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000))
+      ];
+      const boards = await Promise.all(keys.map((key) => nbaService.getScoreboard(key, true)));
+      const events = [...boards.flatMap((board) => board?.events ?? [])]
+        .sort((a: any, b: any) => {
+          const at = Date.parse(String(a?.date ?? '')) || 0;
+          const bt = Date.parse(String(b?.date ?? '')) || 0;
+          if (at !== bt) return at - bt;
+          return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
+        });
+      const idx = events.findIndex((event: any) => String(event?.id) === String(payload.id));
+      const gameIndex = idx >= 0 ? idx + 1 : 1;
+      const streamUrl = buildTemplateStreamUrl(gameIndex);
+
+      dynamicStreams = [
+        {
+          label: `Game ${gameIndex} Stream`,
+          url: streamUrl,
+          mode: 'video'
+        }
+      ];
+      streamResolvedForGameId = payload.id;
+      console.log('[stream][template] resolved', { gameId: payload.id, gameIndex, streamUrl });
+    } catch (error) {
+      console.error('[stream][template] failed to resolve stream url', error);
+    } finally {
+      streamsLoading = false;
+    }
+  }
+
+  $: if (payload?.id && payload?.eventDate && dynamicStreams.length === 0 && !streamsLoading) {
+    resolveTemplateStreamForGame();
+  }
 
   if (typeof window !== 'undefined') {
     const search = new URLSearchParams(window.location.search);
@@ -172,48 +226,102 @@
     return name.includes('FINAL') || short.includes('FINAL');
   }
 
+  function toLocalDateToken(dateStr?: string): string {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return '';
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
   function buildYouTubeQuery(): string {
     const awayName = payload?.linescores?.away?.team?.displayName;
     const homeName = payload?.linescores?.home?.team?.displayName;
-    const eventDate = payload?.eventDate;
-    const datePart = eventDate ? new Date(eventDate).toISOString().slice(0, 10) : '';
+    const datePart = toLocalDateToken(payload?.eventDate);
     return [awayName, 'vs', homeName, 'full game highlights', 'nba', datePart].filter(Boolean).join(' ');
   }
 
-  function buildYouTubeEmbedVideoUrl(videoId: string): string {
-    const params = new URLSearchParams({
-      rel: '0',
-      modestbranding: '1',
-      playsinline: '1'
-    });
-    if (typeof window !== 'undefined' && window.location?.origin) {
-      params.set('origin', window.location.origin);
-    }
-    return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
+  function buildYouTubeFallbackQueries(): string[] {
+    const awayName = payload?.linescores?.away?.team?.displayName;
+    const homeName = payload?.linescores?.home?.team?.displayName;
+    const datePart = toLocalDateToken(payload?.eventDate);
+    const base = [awayName, 'vs', homeName].filter(Boolean).join(' ');
+    if (!base) return [];
+    return [
+      `${base} full game highlights nba ${datePart}`.trim(),
+      `${base} game highlights nba ${datePart}`.trim(),
+      `${base} full game highlights nba`.trim(),
+      `${base} highlights nba`.trim()
+    ];
+  }
+
+  function buildYouTubeWatchVideoUrl(videoId: string): string {
+    return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
   }
 
   async function loadYouTubeHighlightsForCurrentGame(): Promise<void> {
     const query = buildYouTubeQuery();
-    if (!query) return;
-    if (youtubeHighlightsLoading) return;
-    if (youtubeHighlightsKey === query && youtubeHighlightSources.length > 0) return;
+    if (!query) {
+      console.log('[highlights][client] skipped: empty query', { gameId: data.id });
+      return;
+    }
+    if (youtubeHighlightsLoading) {
+      console.log('[highlights][client] skipped: already loading', { gameId: data.id, query });
+      return;
+    }
+    if (youtubeHighlightsKey === query && youtubeHighlightSources.length > 0) {
+      console.log('[highlights][client] skipped: cached sources exist', {
+        gameId: data.id,
+        query,
+        count: youtubeHighlightSources.length
+      });
+      return;
+    }
 
     youtubeHighlightsLoading = true;
+    console.log('[highlights][client] fetching highlights', { gameId: data.id, query });
     try {
-      const response = await fetch(`/api/highlights/nba?query=${encodeURIComponent(query)}&limit=8`);
-      if (!response.ok) return;
-      const json = await response.json();
-      const videos = Array.isArray(json?.videos) ? json.videos : [];
-      const nextSources = videos
-        .filter((item: any) => typeof item?.id === 'string' && item.id.length > 0)
-        .map((item: any, index: number) => ({
-          label: String(item?.title || `YouTube Highlight ${index + 1}`),
-          url: buildYouTubeEmbedVideoUrl(String(item.id)),
-          mode: 'embed' as const
-        }));
+      const candidateQueries = Array.from(new Set([query, ...buildYouTubeFallbackQueries()]));
+      let nextSources: StreamSource[] = [];
+
+      for (const q of candidateQueries) {
+        const apiUrl = `/api/highlights/nba?query=${encodeURIComponent(q)}&limit=8`;
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          console.log('[highlights][client] non-ok response', { gameId: data.id, query: q, status: response.status, apiUrl });
+          continue;
+        }
+        const json = await response.json();
+        const videos = Array.isArray(json?.videos) ? json.videos : [];
+        console.log('[highlights][client] api payload', {
+          gameId: data.id,
+          query: q,
+          videosCount: videos.length,
+          error: json?.error ?? null
+        });
+        nextSources = videos
+          .filter((item: any) => typeof item?.id === 'string' && item.id.length > 0)
+          .map((item: any, index: number) => ({
+            label: String(item?.title || `YouTube Highlight ${index + 1}`),
+            url: buildYouTubeWatchVideoUrl(String(item.id)),
+            mode: 'external' as const
+          }));
+        console.log('[highlights][client] mapped sources', {
+          gameId: data.id,
+          query: q,
+          sourcesCount: nextSources.length,
+          sample: nextSources[0]?.url ?? null
+        });
+        if (nextSources.length > 0) break;
+      }
+
       if (nextSources.length > 0) {
         youtubeHighlightSources = nextSources;
         youtubeHighlightsKey = query;
+      } else {
+        youtubeHighlightSources = [];
       }
     } catch (error) {
       console.error('Failed to load YouTube highlights:', error);
@@ -334,14 +442,30 @@
 
 <div class="p-4 min-h-screen flex flex-col">
   {#if showHighlightsInsteadOfStream}
-    <StreamOverlay
-      title="Game Highlights"
-      sources={buildPostGameHighlightSources()}
-      storageKey={`arrnba.highlightsOverlay.${data.id}`}
-      closedButtonLabel="Open Highlights"
+    {#if youtubeHighlightSources.length > 0}
+      <StreamOverlay
+        title="Game Highlights"
+        sources={buildPostGameHighlightSources()}
+        storageKey={`arrnba.highlightsOverlay.${data.id}`}
+        closedButtonLabel="Open Highlights"
+      />
+    {:else if youtubeHighlightsLoading}
+      <div class="fixed bottom-3 right-3 z-50 rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80">
+        Loading Highlights...
+      </div>
+    {:else}
+      <div class="fixed bottom-3 right-3 z-50 rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80">
+        No Highlights Found
+      </div>
+    {/if} 
+    {:else}
+    <StreamOverlay 
+      title={streamsLoading ? "Searching..." : "Live Stream"} 
+      sources={dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams} 
+      storageKey={`arrnba.streamOverlay.${data.id}`} 
+      secondaryButtonLabel="Open Example"
+      secondaryIframeUrl="https://sharkstreams.net/player.php?channel=1363"
     />
-  {:else}
-    <StreamOverlay title="Game Stream (Placeholder)" sources={placeholderStreams} storageKey={`arrnba.streamOverlay.${data.id}`} />
   {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
     <button class="text-white/70 hover:text-white justify-self-start" on:click={() => history.back()}>Back</button>

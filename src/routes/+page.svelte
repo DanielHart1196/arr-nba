@@ -37,21 +37,39 @@
   const PREFETCH_CHUNK_PAUSE_MS = 120;
   const CACHE_HYDRATE_WINDOW_DAYS = 7;
 
-  const baseDate = new Date();
-  baseDate.setHours(0, 0, 0, 0);
+  let baseDate = localStartOfToday();
 
   const dayOffsets = Array.from({ length: TOTAL_DAYS }, (_, i) => i - START_INDEX);
   const SAVED_DATE_KEY = 'arrnba.selectedDateKey';
   const LAST_DAY_EVENTS_KEY = 'arrnba.lastDayEvents.v1';
+
+  function localStartOfToday(): Date {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }
 
   function getInitialIndexFromSession(): number {
     if (typeof window === 'undefined') return START_INDEX;
     try {
       const raw = sessionStorage.getItem(SAVED_DATE_KEY);
       if (!raw) return START_INDEX;
-      const parsed = parseLocalDateKey(raw);
-      if (!parsed) return START_INDEX;
-      return clampIndex(START_INDEX + dayDiffFromBase(parsed));
+
+      const todayKey = toLocalDateKey(localStartOfToday());
+
+      if (raw.startsWith('{')) {
+        const parsed = JSON.parse(raw) as { selectedDateKey?: string; savedOnDateKey?: string };
+        if (!parsed?.selectedDateKey || parsed.savedOnDateKey !== todayKey) return START_INDEX;
+        const selectedDate = parseLocalDateKey(parsed.selectedDateKey);
+        if (!selectedDate) return START_INDEX;
+        return clampIndex(START_INDEX + dayDiffFromBase(selectedDate));
+      }
+
+      // Backward compatibility for older string-only payloads.
+      const legacyDate = parseLocalDateKey(raw);
+      if (!legacyDate) return START_INDEX;
+      if (toLocalDateKey(legacyDate) !== todayKey) return START_INDEX;
+      return clampIndex(START_INDEX + dayDiffFromBase(legacyDate));
     } catch {
       return START_INDEX;
     }
@@ -93,7 +111,7 @@
     }
   }
 
-  function readCachedScoreboardEvents(date: Date): NBAEvent[] | null {
+  function readRawCachedScoreboardEvents(date: Date): NBAEvent[] | null {
     if (typeof window === 'undefined') return null;
     try {
       const key = `arrnba:scoreboard:${toScoreboardDateKey(date)}`;
@@ -106,6 +124,26 @@
     }
   }
 
+  function readCachedScoreboardEvents(date: Date): NBAEvent[] | null {
+    // Browser cache entries are stored by ESPN date buckets, not local calendar days.
+    // Reconstruct local-day results from adjacent cached buckets so hydration matches runtime fetch logic.
+    const targetLocalDateKey = toLocalDateKey(date);
+    const buckets = [
+      readRawCachedScoreboardEvents(addDays(date, -1)),
+      readRawCachedScoreboardEvents(date),
+      readRawCachedScoreboardEvents(addDays(date, 1))
+    ];
+    const foundBucket = buckets.some((bucket) => Array.isArray(bucket));
+    if (!foundBucket) return null;
+
+    const merged = mergeUniqueAndSortEvents(buckets.flatMap((bucket) => bucket ?? []));
+    const filtered = merged.filter((event) => localDateKeyFromEventDate(event?.date) === targetLocalDateKey);
+
+    // Do not hydrate empty arrays from partial/stale bucket cache; let loadDay fetch instead.
+    if (filtered.length === 0) return null;
+    return filtered;
+  }
+
   function hydrateNearbyDaysFromBrowserCache(seed: Record<number, NBAEvent[]>, centerIndex: number): Record<number, NBAEvent[]> {
     if (typeof window === 'undefined') return seed;
     const next: Record<number, NBAEvent[]> = { ...seed };
@@ -114,7 +152,7 @@
     for (let i = start; i <= end; i++) {
       if (next[i]) continue;
       const cached = readCachedScoreboardEvents(getDateForIndex(i));
-      if (cached) next[i] = cached;
+      if (cached && cached.length > 0) next[i] = cached;
     }
     return next;
   }
@@ -181,9 +219,42 @@
     return Math.round((b - a) / DAY_MS);
   }
 
+  function localDateKeyFromEventDate(dateStr: string | undefined): string | null {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return null;
+    return toLocalDateKey(date);
+  }
+
+  function handleLocalDayRolloverIfNeeded() {
+    const today = localStartOfToday();
+    if (toLocalDateKey(today) === toLocalDateKey(baseDate)) return;
+
+    const wasOnToday = currentIndex === START_INDEX;
+    const previousSelectedDate = selectedDate;
+
+    baseDate = today;
+
+    const rebasedIndex = wasOnToday
+      ? START_INDEX
+      : clampIndex(START_INDEX + dayDiffFromBase(previousSelectedDate));
+
+    setCurrentIndex(rebasedIndex);
+    saveSelectedDateForIndex(rebasedIndex);
+    loadDay(rebasedIndex, true).catch(() => {});
+    loadDay(rebasedIndex - 1).catch(() => {});
+    loadDay(rebasedIndex + 1).catch(() => {});
+  }
+
   async function fetchEventsForDate(date: Date, forceRefresh = false): Promise<NBAEvent[]> {
-    const response = await nbaService.getScoreboard(toScoreboardDateKey(date), forceRefresh);
-    return mergeUniqueAndSortEvents(response.events ?? []);
+    const targetLocalDateKey = toLocalDateKey(date);
+    const buckets = await Promise.all([
+      nbaService.getScoreboard(toScoreboardDateKey(addDays(date, -1)), forceRefresh),
+      nbaService.getScoreboard(toScoreboardDateKey(date), forceRefresh),
+      nbaService.getScoreboard(toScoreboardDateKey(addDays(date, 1)), forceRefresh)
+    ]);
+    const merged = mergeUniqueAndSortEvents(buckets.flatMap((b) => b.events ?? []));
+    return merged.filter((event) => localDateKeyFromEventDate(event?.date) === targetLocalDateKey);
   }
 
   function isTodaySelected(): boolean {
@@ -193,7 +264,7 @@
   async function loadDay(index: number, force = false): Promise<void> {
     const safeIndex = clampIndex(index);
     if (dayLoading.has(safeIndex)) return;
-    if (!force && dayEvents[safeIndex]) return;
+    if (!force && Array.isArray(dayEvents[safeIndex]) && dayEvents[safeIndex].length > 0) return;
 
     const requestSeq = ++loadRequestSeq;
     dayLoading.add(safeIndex);
@@ -259,7 +330,13 @@
   function saveSelectedDateForIndex(index: number) {
     try {
       const date = getDateForIndex(index);
-      sessionStorage.setItem(SAVED_DATE_KEY, toLocalDateKey(date));
+      sessionStorage.setItem(
+        SAVED_DATE_KEY,
+        JSON.stringify({
+          selectedDateKey: toLocalDateKey(date),
+          savedOnDateKey: toLocalDateKey(localStartOfToday())
+        })
+      );
     } catch {}
   }
 
@@ -286,7 +363,8 @@
     if (dayEvents[nextIndex]) {
       saveDayEventsForIndex(nextIndex, dayEvents[nextIndex]);
     }
-    loadDay(nextIndex).catch(() => {});
+    const hasCachedEvents = Array.isArray(dayEvents[nextIndex]) && dayEvents[nextIndex].length > 0;
+    loadDay(nextIndex, !hasCachedEvents).catch(() => {});
     const direction: -1 | 1 = nextIndex > previousIndex ? 1 : -1;
     prefetchNeighbor(nextIndex, direction);
 
@@ -564,6 +642,7 @@
     }, 1200);
 
     interval = setInterval(() => {
+      handleLocalDayRolloverIfNeeded();
       if (!isTodaySelected()) return;
       loadDay(currentIndex, true).catch(() => {});
     }, 10000);
