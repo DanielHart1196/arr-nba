@@ -27,6 +27,28 @@ export class ESPNDataSource implements INBADataSource {
     return res.json();
   }
 
+  async getStandings(forceRefresh: boolean = false): Promise<any> {
+    if (this.isBrowser()) {
+      const search = new URLSearchParams();
+      if (forceRefresh) {
+        search.set('forceRefresh', '1');
+        search.set('_ts', String(Date.now()));
+      }
+      const qs = search.toString();
+      const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
+      const res = await fetch(`/api/standings${qs ? `?${qs}` : ''}`, fetchOpts);
+      if (!res.ok) throw new Error(`Standings API error: ${res.status}`);
+      return res.json();
+    }
+
+    const res = await fetch(
+      'https://site.web.api.espn.com/apis/v2/sports/basketball/nba/standings',
+      forceRefresh ? { cache: 'no-store' } : undefined
+    );
+    if (!res.ok) throw new Error(`ESPN Standings error: ${res.status}`);
+    return res.json();
+  }
+
   async getSummary(eventId: string): Promise<any> {
     const res = await fetch(`https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`ESPN Summary error: ${res.status}`);

@@ -63,6 +63,20 @@ export class NBAService {
     return { events: data?.events ?? [] };
   }
 
+  async getStandings(forceRefresh: boolean = false): Promise<any> {
+    const cacheKey = 'standings';
+    if (forceRefresh) {
+      const fresh = await this.dataSource.getStandings(true);
+      this.cache.set(cacheKey, fresh, 5 * 60 * 1000);
+      return fresh;
+    }
+    return this.cache.getOrFetch(
+      cacheKey,
+      async () => this.dataSource.getStandings(false),
+      5 * 60 * 1000
+    );
+  }
+
   private maybeRefreshBrowserScoreboard(date: string | undefined, cacheKey: string, currentHash: string): void {
     if (!this.isBrowser()) return;
 

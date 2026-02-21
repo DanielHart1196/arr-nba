@@ -1,4 +1,4 @@
-import cloudflareAdapter from '@sveltejs/adapter-cloudflare';
+import cloudflareAdapter from '@sveltejs/adapter-auto';
 import autoAdapter from '@sveltejs/adapter-auto';
 
 const useLocalAdapter = process.env.LOCAL_BUILD === '1';

@@ -39,6 +39,10 @@ export class NBAService {
     return this.nbaService.getBoxscore(eventId);
   }
 
+  async getStandings(forceRefresh: boolean = false): Promise<any> {
+    return this.nbaService.getStandings(forceRefresh);
+  }
+
   getCachedBoxscore(eventId: string): BoxscoreResponse | null {
     return this.nbaService.getCachedBoxscore(eventId);
   }

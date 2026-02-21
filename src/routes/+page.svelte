@@ -94,6 +94,7 @@
   let lastOpenAt = 0;
   let lastPickerOpenAt = 0;
   let datePickerInput: HTMLInputElement | null = null;
+  let menuOpen = false;
 
   function getInitialEventsFromSession(index: number): NBAEvent[] | null {
     if (typeof window === 'undefined') return null;
@@ -423,6 +424,23 @@
     openDatePicker();
   }
 
+  function toggleMenu() {
+    menuOpen = !menuOpen;
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+  }
+
+  function onMenuPlaceholderClick() {
+    closeMenu();
+  }
+
+  function openStandings() {
+    closeMenu();
+    goto('/standings');
+  }
+
   function handleDatePicked(value: string) {
     const picked = parseLocalDateKey(value);
     if (!picked) return;
@@ -666,7 +684,40 @@
 
 <div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
   <div class="grid grid-cols-[1fr_auto_1fr] items-end mb-4" data-no-swipe="true">
-    <div class="justify-self-start h-9 w-9" data-no-swipe="true" aria-hidden="true"></div>
+    <div class="justify-self-start relative" data-no-swipe="true">
+      <button
+        data-no-swipe="true"
+        type="button"
+        aria-label="Open menu"
+        aria-expanded={menuOpen}
+        class="h-9 w-9 rounded border border-white/15 bg-white/5 hover:bg-white/10 flex items-center justify-center"
+        on:click|preventDefault={toggleMenu}
+      >
+        <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16"></path>
+        </svg>
+      </button>
+      {#if menuOpen}
+        <div class="absolute left-0 top-11 z-20 w-44 rounded border border-white/15 bg-[#121212] shadow-lg" data-no-swipe="true">
+          <button
+            data-no-swipe="true"
+            type="button"
+            class="w-full px-3 py-2 text-left text-sm hover:bg-white/10"
+            on:click={openStandings}
+          >
+            Standings
+          </button>
+          <button
+            data-no-swipe="true"
+            type="button"
+            class="w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            on:click={onMenuPlaceholderClick}
+          >
+            Placeholder Item 2
+          </button>
+        </div>
+      {/if}
+    </div>
     <div class="justify-self-center" data-no-swipe="true">
       <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden">
         <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
