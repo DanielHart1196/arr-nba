@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import Hls from 'hls.js';
 
   type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
@@ -48,6 +48,8 @@
   let visible = false;
   let minimized = false;
   let muted = true;
+  let mobileLocked = false;
+  let pendingAutoPip = false;
   let selectedIndex = 0;
   let overrideUrl = '';
   let overrideMode: 'video' | 'embed' | 'external' | null = null;
@@ -501,6 +503,14 @@
 
   function clampLayout(): void {
     if (typeof window === 'undefined') return;
+    if (mobileLocked) {
+      const maxW = Math.max(220, window.innerWidth - (EDGE_PAD * 2));
+      width = Math.min(420, maxW);
+      height = Math.max(146, Math.round(width / ASPECT));
+      x = Math.max(EDGE_PAD, window.innerWidth - width - EDGE_PAD);
+      y = Math.max(EDGE_PAD, window.innerHeight - height - EDGE_PAD);
+      return;
+    }
 
     const maxW = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - (EDGE_PAD * 2)));
     width = Math.max(MIN_WIDTH, Math.min(maxW, width));
@@ -554,6 +564,7 @@
   }
 
   function beginDrag(event: PointerEvent): void {
+    if (mobileLocked) return;
     if (!visible) return;
     dragging = true;
     startPointerX = event.clientX;
@@ -563,6 +574,7 @@
   }
 
   function beginResize(event: PointerEvent): void {
+    if (mobileLocked) return;
     if (!visible || minimized) return;
     event.stopPropagation();
     resizing = true;
@@ -607,6 +619,7 @@
     if (!visible) {
       overrideUrl = '';
       overrideMode = null;
+      pendingAutoPip = false;
     }
     if (visible) clampLayout();
     persist();
@@ -616,6 +629,10 @@
     overrideUrl = '';
     overrideMode = null;
     toggleVisible();
+    if (visible && mobileLocked) {
+      pendingAutoPip = true;
+      void tryAutoPipAfterOpen();
+    }
   }
 
   function openSecondaryIframeOverlay(): void {
@@ -660,6 +677,18 @@
         await videoEl.requestPictureInPicture();
       }
     } catch {}
+  }
+
+  async function tryAutoPipAfterOpen(): Promise<void> {
+    if (!pendingAutoPip || activeMode !== 'video') return;
+    await tick();
+    if (!videoEl) return;
+    try {
+      if ('pictureInPictureEnabled' in document && 'requestPictureInPicture' in videoEl) {
+        await videoEl.requestPictureInPicture();
+      }
+    } catch {}
+    pendingAutoPip = false;
   }
 
   function extractYouTubeVideoId(url: string): string {
@@ -789,9 +818,21 @@
   }
 
   onMount(() => {
+    const refreshMobileLock = () => {
+      if (typeof window === 'undefined') return;
+      mobileLocked = window.matchMedia('(max-width: 900px), (pointer: coarse)').matches;
+      if (mobileLocked) {
+        minimized = false;
+        muted = false;
+      }
+      clampLayout();
+    };
+
     restore();
+    refreshMobileLock();
     clampLayout();
     const onResize = () => {
+      refreshMobileLock();
       clampLayout();
       persist();
     };
@@ -821,6 +862,7 @@
     class="fixed z-50 overflow-hidden rounded-md border border-white/20 bg-black/95 shadow-xl backdrop-blur-sm"
     style="left: {x}px; top: {y}px; width: {minimized ? 220 : width}px;"
   >
+    {#if !mobileLocked}
     <div class="flex items-center gap-2 border-b border-white/15 px-2 py-1.5 text-xs">
       <button type="button" class="cursor-move text-white/75 hover:text-white" on:pointerdown={beginDrag} title="Drag player">
         Move
@@ -861,6 +903,7 @@
         </button>
       </div>
     </div>
+    {/if}
 
     {#if !minimized}
       <div class="relative bg-black" style="height: {height}px;">
@@ -897,14 +940,25 @@
         {:else}
           <div class="flex h-full items-center justify-center text-sm text-white/60">No stream URL configured</div>
         {/if}
-        <button
-          type="button"
-          class="absolute bottom-1 right-1 h-4 w-4 cursor-se-resize rounded-sm border border-white/30 bg-black/80 text-[10px] text-white/70"
-          on:pointerdown={beginResize}
-          title="Resize player"
-        >
-          ◢
-        </button>
+                {#if mobileLocked}
+          <button
+            type="button"
+            class="absolute right-1 top-1 rounded border border-white/20 bg-black/70 px-1.5 py-0.5 text-[11px] text-white/85"
+            on:click={toggleVisible}
+            title="Close player"
+          >
+            X
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="absolute bottom-1 right-1 h-4 w-4 cursor-se-resize rounded-sm border border-white/30 bg-black/80 text-[10px] text-white/70"
+            on:pointerdown={beginResize}
+            title="Resize player"
+          >
+            +
+          </button>
+        {/if}
         {#if showDiagnostics && activeMode === 'video'}
           <div class="absolute left-1 top-1 z-20 max-h-[75%] w-[88%] overflow-auto rounded border border-white/20 bg-black/85 p-2 text-[10px] text-white/80">
             <div class="mb-1 font-semibold text-white/90">Diagnostics</div>
@@ -945,5 +999,6 @@
     </button>
   </div>
 {/if}
+
 
 
