@@ -53,6 +53,7 @@
   let minimized = false;
   let muted = true;
   let mobileLocked = false;
+  let mobilePinned = true;
   let selectedIndex = 0;
   let overrideUrl = '';
   let overrideMode: 'video' | 'embed' | 'external' | null = null;
@@ -61,6 +62,7 @@
   let y = 16;
   let width = 380;
   let height = 214;
+  let overlayStyle = '';
 
   let lastOpenToken = 0;
 
@@ -83,6 +85,9 @@
   $: activeUrl = overrideUrl || selectedSource?.url || streamUrl;
   $: titleText = selectedSource ? `${title} - ${selectedSource.label}` : title;
   $: activeMode = resolveMode(overrideMode, selectedSource, activeUrl);
+  $: overlayStyle = (mobileLocked && mobilePinned && !dragging && !resizing && !dragCandidate)
+    ? `right: ${EDGE_PAD}px; bottom: ${EDGE_PAD}px; width: ${minimized ? 220 : width}px;`
+    : `left: ${x}px; top: ${y}px; width: ${minimized ? 220 : width}px;`;
   $: console.log('[stream][overlay] resolved', {
     title,
     selectedIndex,
@@ -519,38 +524,60 @@
     startStallWatchdog();
   }
 
-  function clampLayout(): void {
+  function clampLayout(soft = false): void {
     if (typeof window === 'undefined') return;
     if (mobileLocked) {
       const maxW = Math.max(220, window.innerWidth - (EDGE_PAD * 2));
-      width = Math.min(420, maxW);
-      height = Math.max(146, Math.round(width / ASPECT));
+      if (!soft || width > maxW) {
+        width = Math.min(420, maxW);
+        height = Math.max(146, Math.round(width / ASPECT));
+      }
       const panelWidth = minimized ? 220 : width;
       const panelHeight = minimized ? 42 : height;
       const maxX = Math.max(EDGE_PAD, window.innerWidth - panelWidth - EDGE_PAD);
       const maxY = Math.max(EDGE_PAD, window.innerHeight - panelHeight - EDGE_PAD);
-      x = Math.max(EDGE_PAD, Math.min(maxX, x));
-      y = Math.max(EDGE_PAD, Math.min(maxY, y));
+      if (!soft || x < EDGE_PAD || x > maxX) {
+        x = Math.max(EDGE_PAD, Math.min(maxX, x));
+      }
+      if (!soft || y < EDGE_PAD || y > maxY) {
+        y = Math.max(EDGE_PAD, Math.min(maxY, y));
+      }
       return;
     }
 
     const maxW = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - (EDGE_PAD * 2)));
-    width = Math.max(MIN_WIDTH, Math.min(maxW, width));
-    height = Math.max(146, Math.round(width / ASPECT));
+    if (!soft || width > maxW) {
+      width = Math.max(MIN_WIDTH, Math.min(maxW, width));
+      height = Math.max(146, Math.round(width / ASPECT));
+    }
 
     const panelWidth = minimized ? 220 : width;
     const panelHeight = minimized ? 42 : (height + 42);
     const maxX = Math.max(EDGE_PAD, window.innerWidth - panelWidth - EDGE_PAD);
     const maxY = Math.max(EDGE_PAD, window.innerHeight - panelHeight - EDGE_PAD);
-    x = Math.max(EDGE_PAD, Math.min(maxX, x));
-    y = Math.max(EDGE_PAD, Math.min(maxY, y));
+    if (!soft || x < EDGE_PAD || x > maxX) {
+      x = Math.max(EDGE_PAD, Math.min(maxX, x));
+    }
+    if (!soft || y < EDGE_PAD || y > maxY) {
+      y = Math.max(EDGE_PAD, Math.min(maxY, y));
+    }
+  }
+
+  function getAnchoredXY(): { x: number; y: number } {
+    if (typeof window === 'undefined') return { x, y };
+    const panelWidth = minimized ? 220 : width;
+    const panelHeight = minimized ? 42 : height;
+    return {
+      x: Math.max(EDGE_PAD, window.innerWidth - panelWidth - EDGE_PAD),
+      y: Math.max(EDGE_PAD, window.innerHeight - panelHeight - EDGE_PAD)
+    };
   }
 
   function persist(): void {
     if (typeof localStorage === 'undefined') return;
     try {
       // Intentionally do not persist `visible` so player does not auto-open on mount.
-      localStorage.setItem(storageKey, JSON.stringify({ minimized, muted, x, y, width, selectedIndex }));
+      localStorage.setItem(storageKey, JSON.stringify({ minimized, muted, x, y, width, selectedIndex, mobilePinned }));
     } catch {}
   }
 
@@ -571,6 +598,7 @@
         y?: number;
         width?: number;
         selectedIndex?: number;
+        mobilePinned?: boolean;
       };
       visible = false;
       minimized = parsed.minimized ?? minimized;
@@ -578,6 +606,7 @@
       x = Number.isFinite(parsed.x) ? Number(parsed.x) : x;
       y = Number.isFinite(parsed.y) ? Number(parsed.y) : y;
       width = Number.isFinite(parsed.width) ? Number(parsed.width) : width;
+      mobilePinned = parsed.mobilePinned ?? mobilePinned;
       if (Number.isFinite(parsed.selectedIndex)) {
         selectedIndex = Math.max(0, Math.min(sources.length - 1, Number(parsed.selectedIndex)));
       }
@@ -609,6 +638,12 @@
   function beginSurfaceDrag(event: PointerEvent): void {
     if (!visible || minimized) return;
     if (event.button !== 0) return;
+    if (mobileLocked && mobilePinned) {
+      const anchored = getAnchoredXY();
+      x = anchored.x;
+      y = anchored.y;
+    }
+    mobilePinned = false;
     dragCandidate = true;
     startPointerX = event.clientX;
     startPointerY = event.clientY;
@@ -619,6 +654,12 @@
   function beginSurfaceTouchDrag(event: TouchEvent): void {
     if (!visible || minimized) return;
     if (!event.touches?.length) return;
+    if (mobileLocked && mobilePinned) {
+      const anchored = getAnchoredXY();
+      x = anchored.x;
+      y = anchored.y;
+    }
+    mobilePinned = false;
     const touch = event.touches[0];
     dragCandidate = true;
     startPointerX = touch.clientX;
@@ -723,11 +764,16 @@
 
   function openSecondaryExternalWindow(): void {
     if (!secondaryExternalUrl) return;
-    window.open(secondaryExternalUrl, '_blank', 'noopener,noreferrer');
+    openExternal(secondaryExternalUrl);
   }
 
   function toggleMinimized(): void {
     minimized = !minimized;
+    if (mobileLocked && mobilePinned) {
+      const anchored = getAnchoredXY();
+      x = anchored.x;
+      y = anchored.y;
+    }
     clampLayout();
     persist();
   }
@@ -872,7 +918,7 @@
       openExternal(activeUrl);
       return;
     }
-    window.open(activeUrl, '_blank', 'noopener,noreferrer,width=1200,height=760');
+    openExternal(activeUrl);
   }
 
   function handleSourceChange(nextIndex: number): void {
@@ -898,8 +944,14 @@
           const maxW = Math.max(220, window.innerWidth - (EDGE_PAD * 2));
           width = Math.min(420, maxW);
           height = Math.max(146, Math.round(width / ASPECT));
-          x = Math.max(EDGE_PAD, window.innerWidth - width - EDGE_PAD);
-          y = Math.max(EDGE_PAD, window.innerHeight - height - EDGE_PAD);
+          if (mobilePinned) {
+            const anchored = getAnchoredXY();
+            x = anchored.x;
+            y = anchored.y;
+          } else {
+            x = Math.max(EDGE_PAD, window.innerWidth - width - EDGE_PAD);
+            y = Math.max(EDGE_PAD, window.innerHeight - height - EDGE_PAD);
+          }
         }
       }
       clampLayout();
@@ -910,7 +962,7 @@
     clampLayout();
     const onResize = () => {
       refreshMobileLock();
-      clampLayout();
+      clampLayout(true);
       persist();
     };
     window.addEventListener('pointermove', handlePointerMove);
@@ -943,7 +995,7 @@
   <div
     bind:this={rootEl}
     class="fixed z-50 overflow-hidden rounded-md border border-white/20 bg-black/95 shadow-xl backdrop-blur-sm"
-    style="left: {x}px; top: {y}px; width: {minimized ? 220 : width}px;"
+    style={overlayStyle}
   >
     {#if !mobileLocked}
     <div class="flex items-center gap-2 border-b border-white/15 px-2 py-1.5 text-xs">
@@ -1024,7 +1076,7 @@
                 src={activeUrl}
                 class="h-full w-full bg-black"
                 title={titleText}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; web-share; fullscreen"
               ></iframe>
             {/if}
           {/if}
@@ -1110,4 +1162,3 @@
     </button>
   </div>
 {/if}
-

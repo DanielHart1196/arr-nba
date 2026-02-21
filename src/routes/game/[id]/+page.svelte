@@ -32,6 +32,10 @@
   let visiblePlays: PlayDisplay[] = [];
   const FINAL_HIGHLIGHTS_DELAY_MS = 5 * 60 * 1000;
   const ESTIMATED_GAME_DURATION_MS = 4 * 60 * 60 * 1000;
+  let lastUpdatedAt: number | null = null;
+  let lastUpdatedTick = Date.now();
+  let lastGameId: string | null = null;
+  let lastUpdatedSeconds: number | null = null;
   
   // --- START OF NEW CODE ---
   let dynamicStreams: StreamSource[] = [];
@@ -93,7 +97,6 @@
 
   $: streamOverlayStore.updateIfActive(data.id, {
     title: streamsLoading ? 'Searching...' : 'Live Stream',
-    sources: dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams,
     secondaryExternalUrl: streamWindowUrl,
     secondaryExternalLabel: 'Open Stream Window'
   });
@@ -156,6 +159,7 @@
     try {
       const response = await nbaService.getBoxscore(data.id);
       payload = { ...response };
+      lastUpdatedAt = Date.now();
     } catch (error) {
       console.error('Failed to refresh boxscore:', error);
     }
@@ -437,7 +441,13 @@
     syncLiveFromScoreboard();
     interval = setInterval(refresh, 10000);
     scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
-    
+    const tickInterval = setInterval(() => {
+      lastUpdatedTick = Date.now();
+    }, 1000);
+
+    return () => {
+      if (tickInterval) clearInterval(tickInterval);
+    };
   });
   onDestroy(() => {
     if (interval) clearInterval(interval);
@@ -476,6 +486,15 @@
   $: if (showHighlightsInsteadOfStream && payload?.linescores?.away?.team?.displayName && payload?.linescores?.home?.team?.displayName) {
     loadYouTubeHighlightsForCurrentGame();
   }
+
+  $: if (data?.id && data.id !== lastGameId) {
+    lastGameId = data.id;
+    payload = nbaService.getCachedBoxscore(data.id);
+    refresh();
+    syncLiveFromScoreboard();
+  }
+
+  $: lastUpdatedSeconds = lastUpdatedAt ? Math.max(0, Math.round((lastUpdatedTick - lastUpdatedAt) / 1000)) : null;
 
   $: {
     if (!isFinalGame()) {
@@ -565,6 +584,9 @@
           {formatStatus(payload?.status?.short)}
         {:else}
           {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
+        {/if}
+        {#if lastUpdatedSeconds !== null}
+          <span class="ml-2 text-white/40 text-xs">{lastUpdatedSeconds}s ago</span>
         {/if}
       </div>
     {/if}
