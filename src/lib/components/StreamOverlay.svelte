@@ -11,6 +11,8 @@
   export let closedButtonLabel = 'Open Stream';
   export let secondaryButtonLabel = '';
   export let secondaryIframeUrl = '';
+  export let secondaryExternalUrl = '';
+  export let secondaryExternalLabel = '';
 
   let rootEl: HTMLDivElement | null = null;
   let videoEl: HTMLVideoElement | null = null;
@@ -639,6 +641,11 @@
     persist();
   }
 
+  function openSecondaryExternalWindow(): void {
+    if (!secondaryExternalUrl) return;
+    window.open(secondaryExternalUrl, '_blank', 'noopener,noreferrer');
+  }
+
   function toggleMinimized(): void {
     minimized = !minimized;
     clampLayout();
@@ -963,6 +970,15 @@
   </div>
 {:else}
   <div class="fixed bottom-3 right-3 z-50 flex items-center gap-2">
+    {#if secondaryExternalUrl}
+      <button
+        type="button"
+        class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+        on:click={openSecondaryExternalWindow}
+      >
+        {secondaryExternalLabel || 'Open Window'}
+      </button>
+    {/if}
     {#if secondaryIframeUrl}
       <button
         type="button"

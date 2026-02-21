@@ -5,6 +5,7 @@
   import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
   import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
+  import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
   import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyle } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
@@ -30,9 +31,8 @@
   // --- START OF NEW CODE ---
   let dynamicStreams: StreamSource[] = [];
   let streamsLoading = false;
-  const placeholderStreams = [
-    { label: 'Stream (Fallback)', url: 'https://sharkstreams.net/category/nba', mode: 'embed' as const }
-  ];
+  let streamWindowUrl = `/stream/${data.id}`;
+  const placeholderStreams = [STREAM_FALLBACK];
 
   async function findGameStream() {
     // 1. Safety check: make sure we have game data first
@@ -41,45 +41,10 @@
     streamsLoading = true;
 
     try {
-      const away = payload.linescores.away.team.displayName.toLowerCase();
-      const home = payload.linescores.home.team.displayName.toLowerCase();
-      
-      // 2. Fetch the SharkStreams website using a "proxy" to bypass security
-      const proxy = "https://api.allorigins.win/get?url=";
-      const target = encodeURIComponent("https://sharkstreams.net/category/nba");
-      
-      const res = await fetch(`${proxy}${target}`);
-      const json = await res.json();
-      const html = json.contents;
-
-      // 3. Turn that text into a format we can search
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const rows = Array.from(doc.querySelectorAll('.row'));
-
-      // 4. Look for the row that has both team names
-      const match = rows.find(row => {
-        const text = row.textContent?.toLowerCase() || "";
-        // We look for the last name (e.g. "Lakers" instead of "Los Angeles Lakers")
-        const awayName = away.split(' ').pop() || "";
-        const homeName = home.split(' ').pop() || "";
-        return text.includes(awayName) && text.includes(homeName);
-      });
-
-      // 5. If we found a match, grab the link hidden in the "Watch" button
-      if (match) {
-        const watchBtn = match.querySelector('.hd-link') as HTMLElement;
-        const onclick = watchBtn?.getAttribute('onclick') || "";
-        const urlMatch = onclick.match(/'([^']+player\.php\?channel=[^']+)'/);
-        
-        if (urlMatch && urlMatch[1]) {
-          dynamicStreams = [{ 
-            label: 'Watch Live (SharkStreams)', 
-            url: urlMatch[1], 
-            mode: 'embed'
-          }];
-        }
-      }
+      const away = payload.linescores.away.team.displayName;
+      const home = payload.linescores.home.team.displayName;
+      const resolved = await findSharkStreamByTeams(away, home);
+      if (resolved) dynamicStreams = [resolved];
     } catch (e) {
       console.error("Stream search failed:", e);
     } finally {
@@ -87,10 +52,21 @@
     }
   }
 
+  function buildStreamWindowUrl(): string {
+    const source = dynamicStreams[0] ?? placeholderStreams[0];
+    const basePath = `/stream/${data.id}`;
+    if (typeof window === 'undefined') return basePath;
+    const next = new URL(basePath, window.location.origin);
+    if (source?.url) next.searchParams.set('url', source.url);
+    if (source?.mode) next.searchParams.set('mode', source.mode);
+    return `${next.pathname}${next.search}`;
+  }
+
   // 6. Tell Svelte to run this search automatically when the game loads
   $: if (payload?.linescores && dynamicStreams.length === 0 && !streamsLoading) {
     findGameStream();
   }
+  $: streamWindowUrl = buildStreamWindowUrl();
   // --- END OF NEW CODE ---
 
   if (typeof window !== 'undefined') {
@@ -471,6 +447,8 @@
       title={streamsLoading ? "Searching..." : "Live Stream"} 
       sources={dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams} 
       storageKey={`arrnba.streamOverlay.${data.id}`} 
+      secondaryExternalUrl={streamWindowUrl}
+      secondaryExternalLabel="Open Stream Window"
     />
   {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
