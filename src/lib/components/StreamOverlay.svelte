@@ -62,6 +62,7 @@
 
   let dragging = false;
   let resizing = false;
+  let dragCandidate = false;
   let startPointerX = 0;
   let startPointerY = 0;
   let startX = 0;
@@ -508,8 +509,12 @@
       const maxW = Math.max(220, window.innerWidth - (EDGE_PAD * 2));
       width = Math.min(420, maxW);
       height = Math.max(146, Math.round(width / ASPECT));
-      x = Math.max(EDGE_PAD, window.innerWidth - width - EDGE_PAD);
-      y = Math.max(EDGE_PAD, window.innerHeight - height - EDGE_PAD);
+      const panelWidth = minimized ? 220 : width;
+      const panelHeight = minimized ? 42 : height;
+      const maxX = Math.max(EDGE_PAD, window.innerWidth - panelWidth - EDGE_PAD);
+      const maxY = Math.max(EDGE_PAD, window.innerHeight - panelHeight - EDGE_PAD);
+      x = Math.max(EDGE_PAD, Math.min(maxX, x));
+      y = Math.max(EDGE_PAD, Math.min(maxY, y));
       return;
     }
 
@@ -585,14 +590,33 @@
     startHeight = height;
   }
 
+  function beginSurfaceDrag(event: PointerEvent): void {
+    if (!visible || minimized) return;
+    if (event.button !== 0) return;
+    dragCandidate = true;
+    startPointerX = event.clientX;
+    startPointerY = event.clientY;
+    startX = x;
+    startY = y;
+  }
+
   function finishInteraction(): void {
-    if (!dragging && !resizing) return;
+    if (!dragging && !resizing && !dragCandidate) return;
     dragging = false;
     resizing = false;
+    dragCandidate = false;
     persist();
   }
 
   function handlePointerMove(event: PointerEvent): void {
+    if (dragCandidate && !dragging && !resizing) {
+      const dx = event.clientX - startPointerX;
+      const dy = event.clientY - startPointerY;
+      if (Math.abs(dx) + Math.abs(dy) > 6) {
+        dragging = true;
+      }
+    }
+
     if (dragging) {
       x = startX + (event.clientX - startPointerX);
       y = startY + (event.clientY - startPointerY);
@@ -809,10 +833,18 @@
   onMount(() => {
     const refreshMobileLock = () => {
       if (typeof window === 'undefined') return;
+      const wasMobileLocked = mobileLocked;
       mobileLocked = window.matchMedia('(max-width: 900px), (pointer: coarse)').matches;
       if (mobileLocked) {
         minimized = false;
         muted = false;
+        if (!wasMobileLocked) {
+          const maxW = Math.max(220, window.innerWidth - (EDGE_PAD * 2));
+          width = Math.min(420, maxW);
+          height = Math.max(146, Math.round(width / ASPECT));
+          x = Math.max(EDGE_PAD, window.innerWidth - width - EDGE_PAD);
+          y = Math.max(EDGE_PAD, window.innerHeight - height - EDGE_PAD);
+        }
       }
       clampLayout();
     };
@@ -895,7 +927,7 @@
     {/if}
 
     {#if !minimized}
-      <div class="relative bg-black" style="height: {height}px;">
+      <div class="relative bg-black" style="height: {height}px;" on:pointerdown={beginSurfaceDrag} role="presentation" tabindex="-1" aria-hidden="true">
         {#if activeUrl}
           {#if activeMode === 'video'}
             <video

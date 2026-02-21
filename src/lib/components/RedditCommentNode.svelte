@@ -9,13 +9,13 @@
   const dispatch = createEventDispatcher<{ toggle: { id: string } }>();
 
   type BodyToken = { kind: 'text'; text: string } | { kind: 'link'; text: string; href: string };
-  type ParsedBody = { lines: BodyToken[][]; media: string[] };
+  type ParsedBody = { lines: BodyToken[][]; media: string[]; hiddenInlineLinks: Set<string> };
 
   const IMAGE_EXT_RE = /\.(png|jpe?g|webp|avif|bmp|svg)(\?.*)?$/i;
   const GIF_EXT_RE = /\.gif(\?.*)?$/i;
   const VIDEO_EXT_RE = /\.(mp4|webm|mov)(\?.*)?$/i;
   const URL_RE = /https?:\/\/[^\s<]+/gi;
-  const MARKDOWN_LINK_RE = /(!)?\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/gi;
+  const MARKDOWN_LINK_RE = /(!)?\[([^\]]*)\]\(([^)\s]+)\)/gi;
 
   $: parsed = parseBody(comment?.body ?? '');
 
@@ -67,6 +67,10 @@
   function normalizeUrl(raw: string): string {
     const decoded = decodeHtmlEntities((raw || '').trim());
     if (!decoded) return '';
+    const giphyPipe = /^giphy\|([a-z0-9]+)$/i.exec(decoded);
+    if (giphyPipe?.[1]) {
+      return `https://media.giphy.com/media/${giphyPipe[1]}/giphy.gif`;
+    }
     try {
       const parsed = new URL(decoded);
       const isRedditMedia = parsed.hostname.toLowerCase().includes('reddit.com') && parsed.pathname === '/media';
@@ -103,6 +107,10 @@
     return IMAGE_EXT_RE.test(url) || GIF_EXT_RE.test(url) || VIDEO_EXT_RE.test(url);
   }
 
+  function isEmbeddableImageUrl(url: string): boolean {
+    return IMAGE_EXT_RE.test(url) || GIF_EXT_RE.test(url);
+  }
+
   function parseBody(body: string): ParsedBody {
     const mediaSet = new Set<string>();
     const lines: BodyToken[][] = [];
@@ -119,8 +127,12 @@
         const isImageSyntax = Boolean(match[1]);
         const href = normalizeUrl(match[3]);
         const label = decodeHtmlEntities(match[2] || href || match[3]);
-        tokens.push({ kind: 'link', text: label, href });
-        if (isImageSyntax || isEmbeddableMediaUrl(href)) mediaSet.add(href);
+        if (isImageSyntax) {
+          if (href) mediaSet.add(href);
+        } else {
+          tokens.push({ kind: 'link', text: label, href });
+          if (isEmbeddableMediaUrl(href)) mediaSet.add(href);
+        }
         last = match.index + match[0].length;
       }
       if (last < line.length) {
@@ -131,7 +143,11 @@
       }
       lines.push(tokens);
     }
-    return { lines, media: [...mediaSet] };
+    const hiddenInlineLinks = new Set<string>();
+    for (const media of mediaSet) {
+      if (isEmbeddableImageUrl(media)) hiddenInlineLinks.add(media);
+    }
+    return { lines, media: [...mediaSet], hiddenInlineLinks };
   }
 </script>
 
@@ -147,18 +163,20 @@
   </div>
   {#if !comment._collapsed}
     <div class="mt-1 break-words">
-      {#each parsed.lines as tokens, lineIndex}
+        {#each parsed.lines as tokens, lineIndex}
         {#each tokens as token, tokenIndex (`${lineIndex}-${tokenIndex}`)}
           {#if token.kind === 'link'}
-            <a
-              href={token.href}
-              target="_blank"
-              rel="noopener noreferrer nofollow"
-              class="text-sky-300 hover:text-sky-200 underline break-all"
-              on:click|stopPropagation
-            >
-              {token.text}
-            </a>
+            {#if !parsed.hiddenInlineLinks.has(token.href)}
+              <a
+                href={token.href}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+                class="text-sky-300 hover:text-sky-200 underline break-all"
+                on:click|stopPropagation
+              >
+                {token.text}
+              </a>
+            {/if}
           {:else}
             <span>{token.text}</span>
           {/if}

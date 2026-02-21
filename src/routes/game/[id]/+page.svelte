@@ -241,27 +241,6 @@
     ];
   }
 
-  function buildYouTubeWatchVideoUrl(videoId: string): string {
-    return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
-  }
-
-  function extractYouTubeVideoId(url: string): string {
-    try {
-      const parsed = new URL(url);
-      const host = parsed.hostname.toLowerCase();
-      if (host.includes('youtu.be')) {
-        return parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
-      }
-      if (!host.includes('youtube.com')) return '';
-      if (parsed.pathname === '/watch') return parsed.searchParams.get('v') || '';
-      const parts = parsed.pathname.split('/').filter(Boolean);
-      const idx = parts.findIndex((p) => p === 'embed' || p === 'shorts');
-      return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : '';
-    } catch {
-      return '';
-    }
-  }
-
   function buildYouTubeEmbedUrl(videoId: string): string {
     return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&playsinline=1`;
   }
@@ -310,8 +289,8 @@
           .filter((item: any) => typeof item?.id === 'string' && item.id.length > 0)
           .map((item: any, index: number) => ({
             label: String(item?.title || `YouTube Highlight ${index + 1}`),
-            url: buildYouTubeWatchVideoUrl(String(item.id)),
-            mode: 'external' as const
+            url: buildYouTubeEmbedUrl(String(item.id)),
+            mode: 'embed' as const
           }));
         console.log('[highlights][client] mapped sources', {
           gameId: data.id,
@@ -337,12 +316,6 @@
 
   function buildPostGameHighlightSources() {
     return youtubeHighlightSources;
-  }
-
-  function buildHighlightIframeUrl(): string {
-    const first = youtubeHighlightSources[0]?.url || '';
-    const id = extractYouTubeVideoId(first);
-    return id ? buildYouTubeEmbedUrl(id) : '';
   }
 
   async function prewarmRedditForCurrentGame() {
@@ -458,9 +431,7 @@
         title="Game Highlights"
         sources={buildPostGameHighlightSources()}
         storageKey={`arrnba.highlightsOverlay.${data.id}`}
-        closedButtonLabel="Open Highlights"
-        secondaryButtonLabel="Open PiP Iframe"
-        secondaryIframeUrl={buildHighlightIframeUrl()}
+        closedButtonLabel="Highlights"
       />
     {:else if youtubeHighlightsLoading}
       <div class="fixed bottom-3 right-3 z-50 rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80">
