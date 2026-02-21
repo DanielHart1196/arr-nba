@@ -26,64 +26,72 @@
   let youtubeHighlightsLoading = false;
   const FINAL_HIGHLIGHTS_DELAY_MS = 5 * 60 * 1000;
   const ESTIMATED_GAME_DURATION_MS = 4 * 60 * 60 * 1000;
- 
+  
+  // --- START OF NEW CODE ---
   let dynamicStreams: StreamSource[] = [];
   let streamsLoading = false;
-  let streamResolvedForGameId = '';
-  const STREAM_URL_TEMPLATE = 'https://cdn{index}.test.com/live/cdn{index}/chunks.m3u8';
   const placeholderStreams = [
-    { label: 'Stream (Fallback)', url: 'https://cdn1.test.com/live/cdn1/chunks.m3u8', mode: 'video' as const }
+    { label: 'Stream (Fallback)', url: 'https://sharkstreams.net/category/nba', mode: 'embed' as const }
   ];
 
-  function buildTemplateStreamUrl(gameIndex: number): string {
-    const safeIndex = Math.max(1, Math.trunc(gameIndex));
-    return STREAM_URL_TEMPLATE.replaceAll('{index}', String(safeIndex));
-  }
-
-  async function resolveTemplateStreamForGame(): Promise<void> {
-    if (!payload?.id || !payload?.eventDate) return;
-    if (streamsLoading) return;
-    if (streamResolvedForGameId === payload.id) return;
-
+  async function findGameStream() {
+    // 1. Safety check: make sure we have game data first
+    if (!payload?.linescores?.away?.team?.displayName || !payload?.linescores?.home?.team?.displayName) return;
+    
     streamsLoading = true;
-    try {
-      const date = new Date(payload.eventDate);
-      const keys = [
-        toScoreboardDateKey(new Date(date.getTime() - 24 * 60 * 60 * 1000)),
-        toScoreboardDateKey(date),
-        toScoreboardDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000))
-      ];
-      const boards = await Promise.all(keys.map((key) => nbaService.getScoreboard(key, true)));
-      const events = [...boards.flatMap((board) => board?.events ?? [])]
-        .sort((a: any, b: any) => {
-          const at = Date.parse(String(a?.date ?? '')) || 0;
-          const bt = Date.parse(String(b?.date ?? '')) || 0;
-          if (at !== bt) return at - bt;
-          return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
-        });
-      const idx = events.findIndex((event: any) => String(event?.id) === String(payload.id));
-      const gameIndex = idx >= 0 ? idx + 1 : 1;
-      const streamUrl = buildTemplateStreamUrl(gameIndex);
 
-      dynamicStreams = [
-        {
-          label: `Game ${gameIndex} Stream`,
-          url: streamUrl,
-          mode: 'video'
+    try {
+      const away = payload.linescores.away.team.displayName.toLowerCase();
+      const home = payload.linescores.home.team.displayName.toLowerCase();
+      
+      // 2. Fetch the SharkStreams website using a "proxy" to bypass security
+      const proxy = "https://api.allorigins.win/get?url=";
+      const target = encodeURIComponent("https://sharkstreams.net/category/nba");
+      
+      const res = await fetch(`${proxy}${target}`);
+      const json = await res.json();
+      const html = json.contents;
+
+      // 3. Turn that text into a format we can search
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const rows = Array.from(doc.querySelectorAll('.row'));
+
+      // 4. Look for the row that has both team names
+      const match = rows.find(row => {
+        const text = row.textContent?.toLowerCase() || "";
+        // We look for the last name (e.g. "Lakers" instead of "Los Angeles Lakers")
+        const awayName = away.split(' ').pop() || "";
+        const homeName = home.split(' ').pop() || "";
+        return text.includes(awayName) && text.includes(homeName);
+      });
+
+      // 5. If we found a match, grab the link hidden in the "Watch" button
+      if (match) {
+        const watchBtn = match.querySelector('.hd-link') as HTMLElement;
+        const onclick = watchBtn?.getAttribute('onclick') || "";
+        const urlMatch = onclick.match(/'([^']+player\.php\?channel=[^']+)'/);
+        
+        if (urlMatch && urlMatch[1]) {
+          dynamicStreams = [{ 
+            label: 'Watch Live (SharkStreams)', 
+            url: urlMatch[1], 
+            mode: 'embed'
+          }];
         }
-      ];
-      streamResolvedForGameId = payload.id;
-      console.log('[stream][template] resolved', { gameId: payload.id, gameIndex, streamUrl });
-    } catch (error) {
-      console.error('[stream][template] failed to resolve stream url', error);
+      }
+    } catch (e) {
+      console.error("Stream search failed:", e);
     } finally {
       streamsLoading = false;
     }
   }
 
-  $: if (payload?.id && payload?.eventDate && dynamicStreams.length === 0 && !streamsLoading) {
-    resolveTemplateStreamForGame();
+  // 6. Tell Svelte to run this search automatically when the game loads
+  $: if (payload?.linescores && dynamicStreams.length === 0 && !streamsLoading) {
+    findGameStream();
   }
+  // --- END OF NEW CODE ---
 
   if (typeof window !== 'undefined') {
     const search = new URLSearchParams(window.location.search);
@@ -463,8 +471,6 @@
       title={streamsLoading ? "Searching..." : "Live Stream"} 
       sources={dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams} 
       storageKey={`arrnba.streamOverlay.${data.id}`} 
-      secondaryButtonLabel="Open Example"
-      secondaryIframeUrl="https://sharkstreams.net/player.php?channel=1363"
     />
   {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
