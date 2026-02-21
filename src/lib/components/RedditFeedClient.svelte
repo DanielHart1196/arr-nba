@@ -64,6 +64,7 @@
     POST: initialSourcePost
   };
   let commentsRequestSeq = 0;
+  let refreshing = false;
   let collapsedByView: Record<string, Record<string, true>> = {};
   let scrollYByView: Record<string, number> = {};
   let activeViewKey = '';
@@ -625,15 +626,21 @@
   }
   
   async function refreshComments(): Promise<void> {
+    if (refreshing) return;
+    refreshing = true;
     if (!currentMode) return;
-    const post = cache[currentMode][currentSource].thread;
-    if (!post) {
-      triedFetch[currentMode][currentSource] = false;
-      await ensureActiveSourceLoaded(currentMode);
-      return;
+    try {
+      const post = cache[currentMode][currentSource].thread;
+      if (!post) {
+        triedFetch[currentMode][currentSource] = false;
+        await ensureActiveSourceLoaded(currentMode);
+        return;
+      }
+      const sort: SortChoice = currentMode === 'POST' ? 'top' : 'new';
+      await fetchCommentsFor(post, sort, currentMode, currentSource, true);
+    } finally {
+      refreshing = false;
     }
-    const sort: SortChoice = currentMode === 'POST' ? 'top' : 'new';
-    await fetchCommentsFor(post, sort, currentMode, currentSource, true);
   }
 
   function getPickerLogoStyle(abbr: string): string {
@@ -664,7 +671,7 @@
         class="h-10 w-10 rounded-full text-white/80 hover:text-white flex items-center justify-center text-xl leading-none"
         on:click={refreshComments}
       >
-        <svg viewBox="0 0 24 24" class="h-5 w-5" aria-hidden="true" focusable="false">
+        <svg viewBox="0 0 24 24" class="h-5 w-5 {refreshing ? 'animate-spin' : ''}" aria-hidden="true" focusable="false">
           <path
             d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
             fill="none"

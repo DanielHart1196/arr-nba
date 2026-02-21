@@ -611,6 +611,16 @@
     startY = y;
   }
 
+  function beginDragFromHandle(event: PointerEvent): void {
+    event.stopPropagation();
+    beginSurfaceDrag(event);
+  }
+
+  function beginTouchDragFromHandle(event: TouchEvent): void {
+    event.stopPropagation();
+    beginSurfaceTouchDrag(event);
+  }
+
   function finishInteraction(): void {
     if (!dragging && !resizing && !dragCandidate) return;
     dragging = false;
@@ -1005,15 +1015,26 @@
         {:else}
           <div class="flex h-full items-center justify-center text-sm text-white/60">No stream URL configured</div>
         {/if}
-                {#if mobileLocked}
-          <button
-            type="button"
-            class="absolute right-1 top-1 rounded border border-white/20 bg-black/70 px-1.5 py-0.5 text-[11px] text-white/85"
-            on:click={toggleVisible}
-            title="Close player"
-          >
-            X
-          </button>
+        {#if mobileLocked}
+          <div class="absolute right-1 top-1 z-10 flex items-center gap-1">
+            <button
+              type="button"
+              class="rounded border border-white/20 bg-black/70 px-2 py-0.5 text-[11px] text-white/85"
+              on:pointerdown={beginDragFromHandle}
+              on:touchstart={beginTouchDragFromHandle}
+              title="Drag player"
+            >
+              Drag
+            </button>
+            <button
+              type="button"
+              class="rounded border border-white/20 bg-black/70 px-1.5 py-0.5 text-[11px] text-white/85"
+              on:click={toggleVisible}
+              title="Close player"
+            >
+              X
+            </button>
+          </div>
         {:else}
           <button
             type="button"
