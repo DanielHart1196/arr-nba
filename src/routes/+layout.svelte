@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { dev } from '$app/environment';
+  import { Capacitor } from '@capacitor/core';
   import '../app.css';
 
   const RESUME_RELOAD_KEY = 'arrnba.resumeReload.v1';
   const RESUME_RELOAD_WINDOW_MS = 15_000;
   let appHydrated = false;
   let resumeWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let removeNativeBackListener: (() => void) | null = null;
 
   function clearResumeWatchdog(): void {
     if (!resumeWatchdogTimer) return;
@@ -90,15 +92,41 @@
       });
     }
 
+    if (Capacitor.isNativePlatform()) {
+      void (async () => {
+        try {
+          const { App } = await import('@capacitor/app');
+          const listener = await App.addListener('backButton', async ({ canGoBack }) => {
+            if (canGoBack || window.location.pathname !== '/') {
+              window.history.back();
+              return;
+            }
+            await App.minimizeApp();
+          });
+          removeNativeBackListener = () => listener.remove();
+        } catch (error) {
+          console.warn('Native back button setup failed:', error);
+        }
+      })();
+    }
+
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pageshow', onPageShow);
       clearResumeWatchdog();
+      if (removeNativeBackListener) {
+        removeNativeBackListener();
+        removeNativeBackListener = null;
+      }
     };
   });
 
   onDestroy(() => {
     clearResumeWatchdog();
+    if (removeNativeBackListener) {
+      removeNativeBackListener();
+      removeNativeBackListener = null;
+    }
   });
 </script>
 

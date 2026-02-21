@@ -76,8 +76,9 @@
       const isRedditMedia = parsed.hostname.toLowerCase().includes('reddit.com') && parsed.pathname === '/media';
       if (isRedditMedia) {
         const wrapped = parsed.searchParams.get('url');
-        if (wrapped) return decodeHtmlEntities(wrapped);
+        if (wrapped) return normalizeUrl(wrapped);
       }
+      if (parsed.protocol === 'http:') parsed.protocol = 'https:';
       return parsed.toString();
     } catch {
       return decoded;
@@ -211,6 +212,7 @@
                 alt="Comment media"
                 loading="lazy"
                 decoding="async"
+                referrerpolicy="no-referrer"
               />
             </a>
           {/if}

@@ -11,6 +11,10 @@
     "dev:host": "vite dev --host"
   },
   "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/cli": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
     "@sveltejs/adapter-auto": "^3.2.0",
     "@sveltejs/kit": "^2.50.2",
     "autoprefixer": "^10.4.19",
