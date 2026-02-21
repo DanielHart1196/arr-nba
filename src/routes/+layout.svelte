@@ -2,6 +2,8 @@
   import { onDestroy, onMount } from 'svelte';
   import { dev } from '$app/environment';
   import { Capacitor } from '@capacitor/core';
+  import StreamOverlay from '../lib/components/StreamOverlay.svelte';
+  import { streamOverlayStore } from '../lib/stores/streamOverlay.store';
   import '../app.css';
 
   const RESUME_RELOAD_KEY = 'arrnba.resumeReload.v1';
@@ -132,4 +134,17 @@
 
 <div class="min-h-screen bg-black text-white overflow-x-hidden" data-arrnba-shell data-arrnba-hydrated={appHydrated ? '1' : '0'}>
   <slot />
+  <StreamOverlay
+    title={$streamOverlayStore.title}
+    streamUrl={$streamOverlayStore.streamUrl}
+    sources={$streamOverlayStore.sources}
+    storageKey={$streamOverlayStore.storageKey}
+    closedButtonLabel={$streamOverlayStore.closedButtonLabel}
+    secondaryButtonLabel={$streamOverlayStore.secondaryButtonLabel}
+    secondaryIframeUrl={$streamOverlayStore.secondaryIframeUrl}
+    secondaryExternalUrl={$streamOverlayStore.secondaryExternalUrl}
+    secondaryExternalLabel={$streamOverlayStore.secondaryExternalLabel}
+    openToken={$streamOverlayStore.openToken}
+    showClosedButton={false}
+  />
 </div>

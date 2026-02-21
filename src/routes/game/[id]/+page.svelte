@@ -4,6 +4,7 @@
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
+  import { streamOverlayStore } from '../../../lib/stores/streamOverlay.store';
   import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
   import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr, getTeamLogoScaleStyle, getTeamLogoScaleStyleByAbbr } from '../../../lib/utils/team.utils';
@@ -71,6 +72,31 @@
     findGameStream();
   }
   $: streamWindowUrl = buildStreamWindowUrl();
+
+  function openGlobalStream(): void {
+    const sources = dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams;
+    streamOverlayStore.open({
+      contextId: data.id,
+      title: streamsLoading ? 'Searching...' : 'Live Stream',
+      sources,
+      storageKey: 'arrnba.streamOverlay.global',
+      closedButtonLabel: 'Open Stream',
+      secondaryExternalUrl: streamWindowUrl,
+      secondaryExternalLabel: 'Open Stream Window'
+    });
+  }
+
+  function openStreamWindow(): void {
+    if (typeof window === 'undefined') return;
+    window.open(streamWindowUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  $: streamOverlayStore.updateIfActive(data.id, {
+    title: streamsLoading ? 'Searching...' : 'Live Stream',
+    sources: dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams,
+    secondaryExternalUrl: streamWindowUrl,
+    secondaryExternalLabel: 'Open Stream Window'
+  });
   // --- END OF NEW CODE ---
 
   if (typeof window !== 'undefined') {
@@ -409,7 +435,7 @@
       refresh();
     }
     syncLiveFromScoreboard();
-    interval = setInterval(refresh, 30000);
+    interval = setInterval(refresh, 10000);
     scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
     
   });
@@ -485,14 +511,23 @@
       </div>
     {/if} 
     {:else}
-    <StreamOverlay 
-      title={streamsLoading ? "Searching..." : "Live Stream"} 
-      sources={dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams} 
-      storageKey={`arrnba.streamOverlay.${data.id}`} 
-      secondaryExternalUrl={streamWindowUrl}
-      secondaryExternalLabel="Open Stream Window"
-    />
-  {/if}
+      <div class="fixed bottom-3 right-3 z-50 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+          on:click={openStreamWindow}
+        >
+          Open Stream Window
+        </button>
+        <button
+          type="button"
+          class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+          on:click={openGlobalStream}
+        >
+          Open Stream
+        </button>
+      </div>
+    {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
     <button class="text-white/70 hover:text-white justify-self-start" on:click={() => history.back()}>Back</button>
     <div class="text-center text-sm text-white/75 font-medium">{formatHeaderDate(payload?.eventDate)}</div>

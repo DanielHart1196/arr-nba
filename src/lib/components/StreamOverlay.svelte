@@ -9,6 +9,8 @@
   export let sources: StreamSource[] = [];
   export let storageKey = 'arrnba.streamOverlay.v1';
   export let closedButtonLabel = 'Open Stream';
+  export let openToken = 0;
+  export let showClosedButton = true;
   export let secondaryButtonLabel = '';
   export let secondaryIframeUrl = '';
   export let secondaryExternalUrl = '';
@@ -60,6 +62,8 @@
   let width = 380;
   let height = 214;
 
+  let lastOpenToken = 0;
+
   let dragging = false;
   let resizing = false;
   let dragCandidate = false;
@@ -102,6 +106,18 @@
       }
       detachHls();
     }
+  }
+  $: if (openToken !== lastOpenToken) {
+    lastOpenToken = openToken;
+    selectedIndex = 0;
+    overrideUrl = '';
+    overrideMode = null;
+    visible = true;
+    minimized = false;
+    clampLayout();
+  }
+  $: if (sources.length > 0 && selectedIndex >= sources.length) {
+    selectedIndex = 0;
   }
 
   function resolveMode(
@@ -1065,7 +1081,7 @@
       </div>
     {/if}
   </div>
-{:else}
+{:else if showClosedButton}
   <div class="fixed bottom-3 right-3 z-50 flex items-center gap-2">
     {#if secondaryExternalUrl}
       <button
@@ -1094,6 +1110,4 @@
     </button>
   </div>
 {/if}
-
-
 
