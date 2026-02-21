@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import Hls from 'hls.js';
 
   type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
@@ -49,7 +49,6 @@
   let minimized = false;
   let muted = true;
   let mobileLocked = false;
-  let pendingAutoPip = false;
   let selectedIndex = 0;
   let overrideUrl = '';
   let overrideMode: 'video' | 'embed' | 'external' | null = null;
@@ -619,7 +618,6 @@
     if (!visible) {
       overrideUrl = '';
       overrideMode = null;
-      pendingAutoPip = false;
     }
     if (visible) clampLayout();
     persist();
@@ -629,10 +627,6 @@
     overrideUrl = '';
     overrideMode = null;
     toggleVisible();
-    if (visible && mobileLocked) {
-      pendingAutoPip = true;
-      void tryAutoPipAfterOpen();
-    }
   }
 
   function openSecondaryIframeOverlay(): void {
@@ -677,18 +671,6 @@
         await videoEl.requestPictureInPicture();
       }
     } catch {}
-  }
-
-  async function tryAutoPipAfterOpen(): Promise<void> {
-    if (!pendingAutoPip || activeMode !== 'video') return;
-    await tick();
-    if (!videoEl) return;
-    try {
-      if ('pictureInPictureEnabled' in document && 'requestPictureInPicture' in videoEl) {
-        await videoEl.requestPictureInPicture();
-      }
-    } catch {}
-    pendingAutoPip = false;
   }
 
   function extractYouTubeVideoId(url: string): string {
