@@ -7,10 +7,10 @@
     team: string;
     logo: string;
     abbr: string;
-    wins: string;
-    losses: string;
+    wl: string;
     pct: string;
     gb: string;
+    l10: string;
     streak: string;
   };
 
@@ -55,16 +55,26 @@
           const team = teamObj?.displayName ?? teamObj?.shortDisplayName ?? teamObj?.abbreviation ?? 'Team';
           const abbr = getTeamLogoAbbr(teamObj);
           const logo = getTeamLogoPath(teamObj);
+          const wins = stats.wins ?? stats.W ?? '-';
+          const losses = stats.losses ?? stats.L ?? '-';
+          const wl = wins !== '-' && losses !== '-' ? `${wins}-${losses}` : '-';
           return {
             position: 0,
             team,
             logo,
             abbr,
-            wins: stats.wins ?? stats.W ?? '-',
-            losses: stats.losses ?? stats.L ?? '-',
+            wl,
             pct: stats.winPercent ?? stats.PCT ?? '-',
             gb: stats.gamesBack ?? stats.GB ?? '-',
-            streak: stats.streak ?? stats.STRK ?? '-'
+            l10:
+              stats['Last Ten Games'] ??
+              stats['Last Ten'] ??
+              stats['Last 10'] ??
+              stats.L10 ??
+              stats.lastTenGames ??
+              stats.lastTen ??
+              '-',
+            streak: stats.streak ?? stats.STRK ?? stats.STREAK ?? '-'
           } as Row;
         })
         .sort((a: Row, b: Row) => toNumber(b.pct) - toNumber(a.pct))
@@ -110,20 +120,20 @@
             <table class="w-full text-sm">
               <thead class="bg-white/5 text-white/70">
                 <tr>
-                  <th class="px-2 py-2 text-right w-8">#</th>
+                  <th class="px-2 py-2 text-center w-8">#</th>
                   <th class="px-2 py-2 text-center w-10">Logo</th>
                   <th class="px-3 py-2 text-left">Team</th>
-                  <th class="px-2 py-2 text-right">W</th>
-                  <th class="px-2 py-2 text-right">L</th>
-                  <th class="px-2 py-2 text-right">Pct</th>
-                  <th class="px-2 py-2 text-right">GB</th>
-                  <th class="px-3 py-2 text-right">Streak</th>
+                  <th class="px-2 py-2 text-center w-14 whitespace-nowrap">W-L</th>
+                  <th class="px-2 py-2 text-center">%</th>
+                  <th class="px-2 py-2 text-center">GB</th>
+                  <th class="px-2 py-2 text-center">L10</th>
+                  <th class="px-3 py-2 text-center">S</th>
                 </tr>
               </thead>
               <tbody>
                 {#each group.rows as row}
                   <tr class="border-t border-white/10">
-                    <td class="px-2 py-2 text-right text-white/80">{row.position}</td>
+                    <td class="px-2 py-2 text-center text-white/80">{row.position}</td>
                     <td class="px-2 py-2">
                       <div class="mx-auto h-7 w-7 flex items-center justify-center overflow-hidden">
                         {#if row.logo}
@@ -139,11 +149,11 @@
                       </div>
                     </td>
                     <td class="px-3 py-2">{row.team}</td>
-                    <td class="px-2 py-2 text-right">{row.wins}</td>
-                    <td class="px-2 py-2 text-right">{row.losses}</td>
-                    <td class="px-2 py-2 text-right">{row.pct}</td>
-                    <td class="px-2 py-2 text-right">{row.gb}</td>
-                    <td class="px-3 py-2 text-right">{row.streak}</td>
+                    <td class="px-2 py-2 text-center whitespace-nowrap">{row.wl}</td>
+                    <td class="px-2 py-2 text-center">{row.pct}</td>
+                    <td class="px-2 py-2 text-center">{row.gb}</td>
+                    <td class="px-2 py-2 text-center">{row.l10}</td>
+                    <td class="px-3 py-2 text-center">{row.streak}</td>
                   </tr>
                 {/each}
               </tbody>

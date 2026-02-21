@@ -6,6 +6,9 @@ export const GET = async ({ params }: any) => {
     const payload = await nbaService.getBoxscore(id);
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e: any) {
-    return new Response(JSON.stringify({ error: e?.message ?? 'unknown' }), { status: 200 });
+    return new Response(JSON.stringify({ error: e?.message ?? 'unknown' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' }
+    });
   }
 };

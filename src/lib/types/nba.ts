@@ -52,6 +52,18 @@ export interface Player {
   dnp?: boolean;
 }
 
+export interface PlayByPlayEntry {
+  id: string;
+  text: string;
+  short?: string;
+  awayScore?: number | string;
+  homeScore?: number | string;
+  period?: number | string;
+  clock?: string;
+  scoringPlay?: boolean;
+  teamAbbr?: string;
+}
+
 export interface BoxscoreResponse {
   id: string;
   eventDate?: string;
@@ -69,6 +81,7 @@ export interface BoxscoreResponse {
     home?: string;
     away?: string;
   };
+  plays?: PlayByPlayEntry[];
   linescores: {
     home: {
       team: Team;

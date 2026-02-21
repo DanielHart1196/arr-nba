@@ -432,13 +432,14 @@
     menuOpen = false;
   }
 
-  function onMenuPlaceholderClick() {
-    closeMenu();
-  }
-
   function openStandings() {
     closeMenu();
     goto('/standings');
+  }
+
+  function openLeaders() {
+    closeMenu();
+    goto('/leaders');
   }
 
   function handleDatePicked(value: string) {
@@ -711,9 +712,9 @@
             data-no-swipe="true"
             type="button"
             class="w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
-            on:click={onMenuPlaceholderClick}
+            on:click={openLeaders}
           >
-            Placeholder Item 2
+            Season Leaders
           </button>
         </div>
       {/if}

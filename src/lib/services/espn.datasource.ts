@@ -50,6 +50,14 @@ export class ESPNDataSource implements INBADataSource {
   }
 
   async getSummary(eventId: string): Promise<any> {
+    if (this.isBrowser()) {
+      const res = await fetch(`/api/boxscore/${encodeURIComponent(eventId)}`);
+      if (!res.ok) throw new Error(`Boxscore API error: ${res.status}`);
+      const payload = await res.json();
+      if (payload?.error) throw new Error(String(payload.error));
+      return payload;
+    }
+
     const res = await fetch(`https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`ESPN Summary error: ${res.status}`);
     return res.json();

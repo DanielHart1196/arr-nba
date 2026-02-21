@@ -6,7 +6,7 @@
   import { nbaService } from '../../../lib/services/nba.service';
   import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
-  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyle } from '../../../lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr, getTeamLogoScaleStyle, getTeamLogoScaleStyleByAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
   type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
@@ -25,6 +25,10 @@
   let youtubeHighlightSources: StreamSource[] = [];
   let youtubeHighlightsKey = '';
   let youtubeHighlightsLoading = false;
+  let showAllPlays = false;
+  const PLAY_WINDOW = 120;
+  let displayPlays: PlayDisplay[] = [];
+  let visiblePlays: PlayDisplay[] = [];
   const FINAL_HIGHLIGHTS_DELAY_MS = 5 * 60 * 1000;
   const ESTIMATED_GAME_DURATION_MS = 4 * 60 * 60 * 1000;
   
@@ -240,6 +244,44 @@
       `${base} highlights nba`.trim()
     ];
   }
+
+  function formatPlayClock(play: BoxscoreResponse['plays'] extends (infer T)[] ? T : any): string {
+    const periodRaw = play?.period;
+    const periodNum = Number(periodRaw);
+    const period = Number.isFinite(periodNum) && periodNum > 0 ? `Q${periodNum}` : (periodRaw ? String(periodRaw) : '');
+    const clock = play?.clock ? String(play.clock) : '';
+    return [period, clock].filter(Boolean).join(' ');
+  }
+
+  type PlayDisplay = (BoxscoreResponse['plays'] extends (infer T)[] ? T : any) & {
+    _showScore?: boolean;
+    _changedSide?: 'away' | 'home';
+  };
+
+  function buildPlayDisplay(plays: BoxscoreResponse['plays'] | undefined): PlayDisplay[] {
+    if (!plays?.length) return [];
+    const out: PlayDisplay[] = [];
+    let prevAway: string | number | undefined;
+    let prevHome: string | number | undefined;
+    for (const play of plays) {
+      const away = play?.awayScore;
+      const home = play?.homeScore;
+      const awayChanged = away != null && away !== prevAway;
+      const homeChanged = home != null && home !== prevHome;
+      const changedSide = awayChanged ? 'away' : (homeChanged ? 'home' : undefined);
+      out.push({
+        ...play,
+        _showScore: awayChanged || homeChanged,
+        _changedSide: changedSide
+      });
+      if (away != null) prevAway = away;
+      if (home != null) prevHome = home;
+    }
+    return out.reverse();
+  }
+
+  $: displayPlays = buildPlayDisplay(payload?.plays);
+  $: visiblePlays = showAllPlays ? displayPlays : displayPlays.slice(0, PLAY_WINDOW);
 
   function buildYouTubeEmbedUrl(videoId: string): string {
     return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&playsinline=1`;
@@ -502,6 +544,59 @@
         </div>
       </BoxScoreToggle>
     </div>
+    {#if uiMode === 'STATS'}
+      <div class="mt-4 rounded border border-white/10 bg-black/40">
+        <div class="px-3 py-2 text-sm font-semibold border-b border-white/10 flex items-center justify-between gap-2">
+          <div>Play by Play</div>
+          {#if displayPlays.length > PLAY_WINDOW}
+            <button
+              type="button"
+              class="text-xs text-white/70 hover:text-white underline"
+              on:click={() => (showAllPlays = !showAllPlays)}
+            >
+              {showAllPlays ? 'Show recent' : `Show all (${displayPlays.length})`}
+            </button>
+          {/if}
+        </div>
+        {#if displayPlays.length}
+          <div class="max-h-[60vh] overflow-y-auto">
+            <ul class="divide-y divide-white/10 text-sm">
+              {#each visiblePlays as play (play.id)}
+                <li class="px-3 py-2 flex gap-2">
+                  <div class="w-16 shrink-0 text-white/70">
+                    <div>{formatPlayClock(play)}</div>
+                    {#if play._showScore}
+                      <div class="text-xs text-white/60 mt-0.5">
+                        <span class={play._changedSide === 'away' ? 'font-semibold text-white/90' : ''}>{play.awayScore ?? '-'}</span>
+                        <span class="text-white/40"> - </span>
+                        <span class={play._changedSide === 'home' ? 'font-semibold text-white/90' : ''}>{play.homeScore ?? '-'}</span>
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="w-8 shrink-0 flex items-center justify-center">
+                    {#if play?.teamAbbr}
+                      <img
+                        src={getTeamLogoPathByAbbr(play.teamAbbr)}
+                        alt={play.teamAbbr}
+                        class="h-6 w-6 object-contain"
+                        loading="lazy"
+                        decoding="async"
+                        style={getTeamLogoScaleStyleByAbbr(play.teamAbbr, 1)}
+                      />
+                    {/if}
+                  </div>
+                  <div class="flex-1">
+                    <div class="text-white/90">{play.text}</div>
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {:else}
+          <div class="px-3 py-3 text-sm text-white/60">No play-by-play data available.</div>
+        {/if}
+      </div>
+    {/if}
   {:else}
     <div class="flex items-center justify-center py-8">
       <div class="animate-spin w-8 h-8 border-4 border-white/10 border-t-white/70 rounded-full"></div>
