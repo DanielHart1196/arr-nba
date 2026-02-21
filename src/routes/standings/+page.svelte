@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { getTeamLogoPath } from '$lib/utils/team.utils';
 
   type Row = {
     position: number;
@@ -49,9 +50,9 @@
       const rows = entries
         .map((entry: any) => {
           const stats = toStatMap(entry?.stats);
-          const team = entry?.team?.displayName ?? entry?.team?.shortDisplayName ?? entry?.team?.abbreviation ?? 'Team';
-          const logos = Array.isArray(entry?.team?.logos) ? entry.team.logos : [];
-          const logo = logos[0]?.href ?? '';
+          const teamObj = entry?.team ?? {};
+          const team = teamObj?.displayName ?? teamObj?.shortDisplayName ?? teamObj?.abbreviation ?? 'Team';
+          const logo = getTeamLogoPath(teamObj);
           return {
             position: 0,
             team,
