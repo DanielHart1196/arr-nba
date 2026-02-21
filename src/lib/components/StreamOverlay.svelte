@@ -600,6 +600,17 @@
     startY = y;
   }
 
+  function beginSurfaceTouchDrag(event: TouchEvent): void {
+    if (!visible || minimized) return;
+    if (!event.touches?.length) return;
+    const touch = event.touches[0];
+    dragCandidate = true;
+    startPointerX = touch.clientX;
+    startPointerY = touch.clientY;
+    startX = x;
+    startY = y;
+  }
+
   function finishInteraction(): void {
     if (!dragging && !resizing && !dragCandidate) return;
     dragging = false;
@@ -630,6 +641,25 @@
       width = nextWidth;
       height = Math.max(146, Math.round(nextWidth / ASPECT));
       clampLayout();
+    }
+  }
+
+  function handleTouchMove(event: TouchEvent): void {
+    if (!event.touches?.length) return;
+    if (!dragCandidate && !dragging && !resizing) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - startPointerX;
+    const dy = touch.clientY - startPointerY;
+    if (dragCandidate && !dragging && !resizing) {
+      if (Math.abs(dx) + Math.abs(dy) > 6) {
+        dragging = true;
+      }
+    }
+    if (dragging) {
+      x = startX + dx;
+      y = startY + dy;
+      clampLayout();
+      event.preventDefault();
     }
   }
 
@@ -859,11 +889,17 @@
     };
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', finishInteraction);
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', finishInteraction);
+    window.addEventListener('touchcancel', finishInteraction);
     window.addEventListener('resize', onResize);
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', finishInteraction);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', finishInteraction);
+      window.removeEventListener('touchcancel', finishInteraction);
       window.removeEventListener('resize', onResize);
     };
   });
@@ -927,7 +963,15 @@
     {/if}
 
     {#if !minimized}
-      <div class="relative bg-black" style="height: {height}px;" on:pointerdown={beginSurfaceDrag} role="presentation" tabindex="-1" aria-hidden="true">
+      <div
+        class="relative bg-black touch-none"
+        style="height: {height}px;"
+        on:pointerdown={beginSurfaceDrag}
+        on:touchstart={beginSurfaceTouchDrag}
+        role="presentation"
+        tabindex="-1"
+        aria-hidden="true"
+      >
         {#if activeUrl}
           {#if activeMode === 'video'}
             <video
