@@ -1,11 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { getTeamLogoPath } from '$lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyleByAbbr } from '$lib/utils/team.utils';
 
   type Row = {
     position: number;
     team: string;
     logo: string;
+    abbr: string;
     wins: string;
     losses: string;
     pct: string;
@@ -52,11 +53,13 @@
           const stats = toStatMap(entry?.stats);
           const teamObj = entry?.team ?? {};
           const team = teamObj?.displayName ?? teamObj?.shortDisplayName ?? teamObj?.abbreviation ?? 'Team';
+          const abbr = getTeamLogoAbbr(teamObj);
           const logo = getTeamLogoPath(teamObj);
           return {
             position: 0,
             team,
             logo,
+            abbr,
             wins: stats.wins ?? stats.W ?? '-',
             losses: stats.losses ?? stats.L ?? '-',
             pct: stats.winPercent ?? stats.PCT ?? '-',
@@ -122,9 +125,16 @@
                   <tr class="border-t border-white/10">
                     <td class="px-2 py-2 text-right text-white/80">{row.position}</td>
                     <td class="px-2 py-2">
-                      <div class="mx-auto h-6 w-6 flex items-center justify-center">
+                      <div class="mx-auto h-7 w-7 flex items-center justify-center overflow-hidden">
                         {#if row.logo}
-                          <img src={row.logo} alt={row.team} class="h-6 w-6 object-contain" loading="lazy" decoding="async" />
+                          <img
+                            src={row.logo}
+                            alt={row.team}
+                            class="h-7 w-7 object-contain"
+                            loading="lazy"
+                            decoding="async"
+                            style={getTeamLogoScaleStyleByAbbr(row.abbr)}
+                          />
                         {/if}
                       </div>
                     </td>
