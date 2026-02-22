@@ -58,8 +58,8 @@ export class ESPNDataSource implements INBADataSource {
       }
       const qs = search.toString();
       const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
-      const res = await fetch(`/api/boxscore/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ''}`, fetchOpts);
-      if (!res.ok) throw new Error(`Boxscore API error: ${res.status}`);
+      const res = await fetch(`/api/summary/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ''}`, fetchOpts);
+      if (!res.ok) throw new Error(`Summary API error: ${res.status}`);
       const payload = await res.json();
       if (payload?.error) throw new Error(String(payload.error));
       return payload;

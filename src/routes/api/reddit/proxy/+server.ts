@@ -8,6 +8,41 @@ const BROWSER_HEADERS = {
   'Referer': 'https://www.reddit.com/',
 };
 
+const FETCH_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(targetUrl: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(targetUrl, {
+      headers: BROWSER_HEADERS,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function withRawJson(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has('raw_json')) parsed.searchParams.set('raw_json', '1');
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function toOldReddit(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hostname = 'old.reddit.com';
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export const GET: RequestHandler = async ({ url }) => {
   const targetUrl = url.searchParams.get('url');
   
@@ -20,14 +55,20 @@ export const GET: RequestHandler = async ({ url }) => {
     throw error(403, 'Only reddit.com URLs are allowed');
   }
 
+  const primaryUrl = withRawJson(targetUrl);
+  const fallbackUrl = withRawJson(toOldReddit(targetUrl));
+
   try {
-    const response = await fetch(targetUrl, {
-      headers: BROWSER_HEADERS
-    });
+    let response = await fetchWithTimeout(primaryUrl);
+
+    if (!response.ok && fallbackUrl !== primaryUrl) {
+      console.warn(`Reddit proxy primary failed ${response.status}, retrying old.reddit.com`);
+      response = await fetchWithTimeout(fallbackUrl);
+    }
 
     if (!response.ok) {
-      console.error(`Vercel Bridge Proxy Error: ${response.status} for ${targetUrl}`);
-      return new Response(await response.text(), { 
+      console.error(`Vercel Bridge Proxy Error: ${response.status} for ${primaryUrl}`);
+      return new Response(await response.text(), {
         status: response.status,
         headers: {
           'content-type': 'text/plain',
@@ -45,6 +86,6 @@ export const GET: RequestHandler = async ({ url }) => {
     });
   } catch (err) {
     console.error('Vercel Bridge Proxy Exception:', err);
-    throw error(500, 'Bridge failed to fetch');
+    throw error(504, 'Bridge failed to fetch');
   }
 };

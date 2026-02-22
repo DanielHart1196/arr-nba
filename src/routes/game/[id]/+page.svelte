@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
@@ -8,13 +9,15 @@
   import { streamOverlayStore } from '../../../lib/stores/streamOverlay.store';
   import { addDays, toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
-  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr, getTeamLogoScaleStyle, getTeamLogoScaleStyleByAbbr } from '../../../lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr } from '../../../lib/utils/team.utils';
+  import TeamLogo from '../../../lib/components/TeamLogo.svelte';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
   type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
   
   export let data: { id: string; streamed?: { payload?: Promise<BoxscoreResponse> } };
-  let payload: BoxscoreResponse | null = nbaService.getCachedBoxscore(data.id);
+  let payload: BoxscoreResponse | null = null;
+  let stableLinescores: BoxscoreResponse['linescores'] | null = null;
   let interval: any;
   let scoreboardInterval: any;
   let handledStreamedPayload: Promise<BoxscoreResponse> | undefined;
@@ -43,6 +46,8 @@
   // --- START OF NEW CODE ---
   let dynamicStreams: StreamSource[] = [];
   let streamsLoading = false;
+  let lastStreamSearchKey = '';
+  let lastStreamSearchAt = 0;
   const placeholderStreams = [STREAM_FALLBACK];
 
   async function findGameStream() {
@@ -73,6 +78,13 @@
       }
 
       if (!away || !home) return;
+      const key = `${away}|${home}`;
+      const now = Date.now();
+      if (key === lastStreamSearchKey && now - lastStreamSearchAt < 10 * 60 * 1000) {
+        return;
+      }
+      lastStreamSearchKey = key;
+      lastStreamSearchAt = now;
       const resolved = await findSharkStreamByTeams(away, home);
       if (resolved) dynamicStreams = [resolved];
     } catch (e) {
@@ -112,35 +124,6 @@
   });
   // --- END OF NEW CODE ---
 
-  if (typeof window !== 'undefined') {
-    const search = new URLSearchParams(window.location.search);
-    const modeParam = (search.get('mode') || '').toUpperCase();
-    const sideParam = (search.get('side') || '').toLowerCase();
-    const sourceParam = (search.get('source') || '').toLowerCase();
-    const sourceLiveParam = (search.get('sourceLive') || '').toLowerCase();
-    const sourcePostParam = (search.get('sourcePost') || '').toLowerCase();
-
-    if (modeParam === 'LIVE' || modeParam === 'STATS' || modeParam === 'POST') uiMode = modeParam;
-    if (sideParam === 'home' || sideParam === 'away') uiSide = sideParam;
-    if (sourceParam === 'reddit' || sourceParam === 'away' || sourceParam === 'home') {
-      uiSourceLive = sourceParam;
-      uiSourcePost = sourceParam;
-    }
-    if (sourceLiveParam === 'reddit' || sourceLiveParam === 'away' || sourceLiveParam === 'home') uiSourceLive = sourceLiveParam;
-    if (sourcePostParam === 'reddit' || sourcePostParam === 'away' || sourcePostParam === 'home') uiSourcePost = sourcePostParam;
-  }
-
-  function writeUiStateToUrl(): void {
-    if (typeof window === 'undefined') return;
-    const next = new URL(window.location.href);
-    next.searchParams.set('mode', uiMode);
-    next.searchParams.set('side', uiSide);
-    next.searchParams.set('sourceLive', uiSourceLive);
-    next.searchParams.set('sourcePost', uiSourcePost);
-    next.searchParams.delete('source');
-    window.history.replaceState(window.history.state, '', `${next.pathname}${next.search}`);
-  }
-
   function handleViewStateChange(state: { mode: 'LIVE' | 'STATS' | 'POST'; side: 'home' | 'away' }): void {
     let changed = false;
     if (uiMode !== state.mode) {
@@ -151,7 +134,6 @@
       uiSide = state.side;
       changed = true;
     }
-    if (changed) writeUiStateToUrl();
   }
 
   function handleSourceChange(state: { mode: 'LIVE' | 'POST'; source: 'reddit' | 'away' | 'home' }): void {
@@ -162,13 +144,25 @@
       if (uiSourcePost === state.source) return;
       uiSourcePost = state.source;
     }
-    writeUiStateToUrl();
   }
   
   async function refresh() {
+    if (isFinalGame() && hasLinescoreData() && payload?.eventDate) return;
     try {
       const response = await nbaService.getBoxscore(data.id, true);
-      payload = { ...response };
+      const keepOldLines = hasLinescoreData();
+      const nextLines = response?.linescores;
+      const nextAwayPeriods = nextLines?.away?.periods ?? [];
+      const nextHomePeriods = nextLines?.home?.periods ?? [];
+      const nextAwayTotal = Number(nextLines?.away?.total ?? 0);
+      const nextHomeTotal = Number(nextLines?.home?.total ?? 0);
+      const nextHasLines =
+        (nextAwayPeriods.length + nextHomePeriods.length) > 0 ||
+        (Number.isFinite(nextAwayTotal) && Number.isFinite(nextHomeTotal) && (nextAwayTotal + nextHomeTotal) > 0);
+      payload = {
+        ...response,
+        linescores: keepOldLines && !nextHasLines ? payload?.linescores : response.linescores
+      };
       lastUpdatedAt = Date.now();
     } catch (error) {
       console.error('Failed to refresh boxscore:', error);
@@ -197,9 +191,10 @@
       const awayPeriods = (away.linescores ?? [])
         .map((p: any) => Number(p?.value ?? p?.displayValue ?? p))
         .filter((n: number) => Number.isFinite(n));
+      const awayScore = Number(away.score);
       payload.linescores.away = {
         ...payload.linescores.away,
-        total: Number(away.score ?? payload.linescores.away.total ?? 0),
+        total: Number.isFinite(awayScore) && awayScore > 0 ? awayScore : (payload.linescores.away.total ?? 0),
         periods: awayPeriods.length > 0 ? awayPeriods : payload.linescores.away.periods
       };
     }
@@ -208,9 +203,10 @@
       const homePeriods = (home.linescores ?? [])
         .map((p: any) => Number(p?.value ?? p?.displayValue ?? p))
         .filter((n: number) => Number.isFinite(n));
+      const homeScore = Number(home.score);
       payload.linescores.home = {
         ...payload.linescores.home,
-        total: Number(home.score ?? payload.linescores.home.total ?? 0),
+        total: Number.isFinite(homeScore) && homeScore > 0 ? homeScore : (payload.linescores.home.total ?? 0),
         periods: homePeriods.length > 0 ? homePeriods : payload.linescores.home.periods
       };
     }
@@ -219,14 +215,34 @@
   }
 
   async function syncLiveFromScoreboard() {
-    const eventDate = payload?.eventDate ? new Date(payload.eventDate) : new Date();
-    const key = toScoreboardDateKey(eventDate);
+    if (isFinalGame() && hasLinescoreData()) return;
+    if (!payload?.eventDate) return;
+    const eventDate = new Date(payload.eventDate);
+    if (Number.isNaN(eventDate.getTime())) return;
+    const candidates = [eventDate, addDays(eventDate, -1), addDays(eventDate, 1)];
+    const keys = candidates.map((d) => toScoreboardDateKey(d));
 
     try {
-      const board = await nbaService.getScoreboard(key, true);
-      const event = (board?.events ?? []).find((e) => String(e.id) === String(data.id));
-      if (event) {
-        applyScoreboardEvent(event);
+      let foundEvent: NBAEvent | null = null;
+      for (const key of keys) {
+        const board = await nbaService.getScoreboard(key, true);
+        const event = (board?.events ?? []).find((e) => String(e.id) === String(data.id));
+        console.log('[boxscore][scoreboard]', {
+          gameId: data.id,
+          key,
+          found: Boolean(event),
+          awayScore: event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === 'away')?.score,
+          homeScore: event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === 'home')?.score,
+          awayPeriods: event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === 'away')?.linescores ?? [],
+          homePeriods: event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === 'home')?.linescores ?? []
+        });
+        if (event) {
+          foundEvent = event;
+          break;
+        }
+      }
+      if (foundEvent) {
+        applyScoreboardEvent(foundEvent);
       }
     } catch (error) {
       console.error('Failed to sync live game from scoreboard:', error);
@@ -252,6 +268,17 @@
     const name = (payload?.status?.name ?? '').toUpperCase();
     const short = (payload?.status?.short ?? '').toUpperCase();
     return name.includes('FINAL') || short.includes('FINAL');
+  }
+
+  function hasLinescoreData(target?: BoxscoreResponse | null): boolean {
+    const lines = target?.linescores ?? payload?.linescores;
+    const awayPeriods = lines?.away?.periods ?? [];
+    const homePeriods = lines?.home?.periods ?? [];
+    const awayTotal = Number(lines?.away?.total ?? 0);
+    const homeTotal = Number(lines?.home?.total ?? 0);
+    const hasPeriods = (awayPeriods.length + homePeriods.length) > 0;
+    const hasTotals = Number.isFinite(awayTotal) && Number.isFinite(homeTotal) && (awayTotal + homeTotal) > 0;
+    return hasPeriods || hasTotals;
   }
 
   function toLocalDateToken(dateStr?: string): string {
@@ -444,13 +471,19 @@
     }
   }
   onMount(() => {
-    // If payload is still null, try refreshing immediately on client
-    if (!payload) {
+    const cached = nbaService.getCachedBoxscore(data.id);
+    if (cached && hasLinescoreData(cached)) {
+      payload = cached;
+    }
+    // If payload is missing, missing linescores, or missing eventDate, refresh immediately on client
+    if (!payload || !hasLinescoreData() || !payload?.eventDate) {
       refresh();
     }
     syncLiveFromScoreboard();
-    interval = setInterval(refresh, 10000);
-    scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
+    if (!isFinalGame() || !hasLinescoreData()) {
+      interval = setInterval(refresh, 10000);
+      scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
+    }
     const tickInterval = setInterval(() => {
       lastUpdatedTick = Date.now();
     }, 1000);
@@ -524,12 +557,36 @@
 
   $: if (data?.id && data.id !== lastGameId) {
     lastGameId = data.id;
-    payload = nbaService.getCachedBoxscore(data.id);
+    stableLinescores = null;
+    const cached = nbaService.getCachedBoxscore(data.id);
+    if (cached && hasLinescoreData(cached)) {
+      payload = cached;
+    } else {
+      payload = null;
+    }
+    if (!payload || !hasLinescoreData() || !payload?.eventDate) {
+      refresh();
+    }
     refresh();
     syncLiveFromScoreboard();
   }
 
+  $: if (isFinalGame() && hasLinescoreData()) {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    if (scoreboardInterval) {
+      clearInterval(scoreboardInterval);
+      scoreboardInterval = null;
+    }
+  }
+
   $: lastUpdatedSeconds = lastUpdatedAt ? Math.max(0, Math.round((lastUpdatedTick - lastUpdatedAt) / 1000)) : null;
+
+  $: if (payload && hasLinescoreData(payload)) {
+    stableLinescores = payload.linescores;
+  }
 
   $: {
     if (!isFinalGame()) {
@@ -577,7 +634,7 @@
       </div>
     {/if}
   <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
-    <button class="text-white/70 hover:text-white justify-self-start" on:click={() => history.back()}>Back</button>
+    <button class="text-white/70 hover:text-white justify-self-start" on:click={() => goto('/')}>Back</button>
     <div class="text-center text-sm text-white/75 font-medium">{formatHeaderDate(payload?.eventDate)}</div>
     <button class="invisible pointer-events-none justify-self-end" tabindex="-1" aria-hidden="true">Back</button>
   </div>
@@ -585,29 +642,17 @@
     {#if payload?.linescores}
       <div class="flex items-center justify-between text-lg font-semibold">
         <div class="flex items-center gap-2">
-          <img
-            src={getTeamLogoPath(payload?.linescores?.away?.team)}
-            alt="away"
-            width="28" height="28" loading="eager" decoding="async"
-            style={getTeamLogoScaleStyle(payload?.linescores?.away?.team)}
-            on:error={hideBrokenImage}
-          />
+          <TeamLogo team={payload?.linescores?.away?.team ?? null} className="h-7 w-7 object-contain" alt="away" loading="eager" />
           <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
         </div>
         <span>{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
         <div class="flex items-center gap-2">
           <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
-          <img
-            src={getTeamLogoPath(payload?.linescores?.home?.team)}
-            alt="home"
-            width="28" height="28" loading="eager" decoding="async"
-            style={getTeamLogoScaleStyle(payload?.linescores?.home?.team)}
-            on:error={hideBrokenImage}
-          />
+          <TeamLogo team={payload?.linescores?.home?.team ?? null} className="h-7 w-7 object-contain" alt="home" loading="eager" />
         </div>
       </div>
-      <div class="text-center text-white/70 text-sm mt-1">
-        {#if payload?.status?.name && payload?.status?.name?.toUpperCase()?.includes('FINAL')}
+      <div class="relative text-white/70 text-sm mt-1 text-center">
+        {#if isFinalGame()}
           FINAL
         {:else if payload?.status?.short}
           {formatStatus(payload?.status?.short)}
@@ -615,7 +660,7 @@
           {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
         {/if}
         {#if lastUpdatedSeconds !== null}
-          <span class="ml-2 text-white/40 text-xs">{lastUpdatedSeconds}s ago</span>
+          <span class="absolute right-0 top-0 text-white/40 text-xs">{lastUpdatedSeconds}s ago</span>
         {/if}
       </div>
     {/if}
@@ -624,7 +669,7 @@
     <div class="text-red-400">{payload.error}</div>
   {:else if payload?.linescores}
     <div class="flex-1 min-h-[40vh]">
-      <BoxScoreToggle players={payload.players} linescores={payload.linescores} initialMode={uiMode} initialSide={uiSide} onViewStateChange={handleViewStateChange}>
+      <BoxScoreToggle players={payload.players} linescores={stableLinescores ?? payload.linescores} initialMode={uiMode} initialSide={uiSide} onViewStateChange={handleViewStateChange}>
         <div slot="reddit" let:mode let:side>
           <RedditFeedClient awayName={payload?.linescores?.away?.team?.displayName} homeName={payload?.linescores?.home?.team?.displayName} eventDate={payload?.eventDate} eventId={payload?.id || data.id} initialSourceLive={uiSourceLive} initialSourcePost={uiSourcePost} onSourceChange={handleSourceChange} {mode} />
         </div>
@@ -661,14 +706,7 @@
                   </div>
                   <div class="w-8 shrink-0 flex items-center justify-center">
                     {#if play?.teamAbbr}
-                      <img
-                        src={getTeamLogoPathByAbbr(play.teamAbbr)}
-                        alt={play.teamAbbr}
-                        class="h-6 w-6 object-contain"
-                        loading="lazy"
-                        decoding="async"
-                        style={getTeamLogoScaleStyleByAbbr(play.teamAbbr, 1)}
-                      />
+                      <TeamLogo abbr={play.teamAbbr} className="h-6 w-6 object-contain" alt={play.teamAbbr} />
                     {/if}
                   </div>
                   <div class="flex-1">

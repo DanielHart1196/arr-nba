@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyleByAbbr } from '$lib/utils/team.utils';
+  import TeamLogo from '$lib/components/TeamLogo.svelte';
+  import { getTeamLogoAbbr, getTeamLogoPath } from '$lib/utils/team.utils';
 
   type Row = {
     position: number;
@@ -20,6 +21,9 @@
   };
 
   export let data: { standings: any; error: string | null };
+  let menuOpen = false;
+  let menuPanelEl: HTMLDivElement | null = null;
+  let menuListenersActive = false;
 
   function toStatMap(stats: any[]): Record<string, string> {
     const out: Record<string, string> = {};
@@ -92,19 +96,82 @@
   }
 
   $: groups = parseGroups(data.standings);
+
+  $: if (menuOpen) {
+    addMenuOutsideListeners();
+  } else {
+    removeMenuOutsideListeners();
+  }
+
+  function navigateFromMenu(path: string) {
+    menuOpen = false;
+    requestAnimationFrame(() => {
+      goto(path);
+    });
+  }
+  function toggleMenu(): void {
+    menuOpen = !menuOpen;
+  }
+
+  function handleOutsideMenuEvent(event: Event): void {
+    if (!menuOpen) return;
+    const target = event.target as Node | null;
+    if (menuPanelEl && target && menuPanelEl.contains(target)) return;
+    menuOpen = false;
+  }
+
+  function addMenuOutsideListeners(): void {
+    if (menuListenersActive || typeof window === 'undefined') return;
+    menuListenersActive = true;
+    window.addEventListener('pointerdown', handleOutsideMenuEvent, { capture: true, passive: true });
+    window.addEventListener('wheel', handleOutsideMenuEvent, { capture: true, passive: true });
+    window.addEventListener('touchstart', handleOutsideMenuEvent, { capture: true, passive: true });
+  }
+
+  function removeMenuOutsideListeners(): void {
+    if (!menuListenersActive || typeof window === 'undefined') return;
+    menuListenersActive = false;
+    window.removeEventListener('pointerdown', handleOutsideMenuEvent, { capture: true });
+    window.removeEventListener('wheel', handleOutsideMenuEvent, { capture: true });
+    window.removeEventListener('touchstart', handleOutsideMenuEvent, { capture: true });
+  }
+
 </script>
 
 <div class="p-4 min-h-screen">
   <div class="flex items-center justify-between mb-4">
-    <button
-      type="button"
-      class="h-9 px-3 rounded border border-white/15 bg-white/5 hover:bg-white/10"
-      on:click={() => goto('/')}
-    >
-      Back
-    </button>
-    <h1 class="text-lg font-semibold">NBA Standings</h1>
     <div class="w-[64px]"></div>
+    <h1 class="flex-1 text-center text-lg font-semibold cursor-pointer" on:click={toggleMenu}>NBA Standings</h1>
+    <div class="relative w-[64px] flex justify-end items-center">
+      {#if menuOpen}
+        <div
+          class="absolute right-0 top-10 z-[999] w-44 rounded border border-white/15 bg-[#121212] shadow-lg"
+          bind:this={menuPanelEl}
+        >
+          <a
+            href="/"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
+            on:click|preventDefault={() => navigateFromMenu('/')}
+          >
+            Scoreboard
+          </a>
+          <a
+            href="/standings"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            on:click|preventDefault={() => navigateFromMenu('/standings')}
+          >
+            Standings
+          </a>
+          <a
+            href="/stats"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            on:click|preventDefault={() => navigateFromMenu('/stats')}
+          >
+            Stats
+          </a>
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if data.error}
@@ -116,7 +183,7 @@
       {#each groups as group}
         <section class="rounded border border-white/10 overflow-hidden">
           <header class="px-3 py-2 bg-white/5 text-sm font-medium">{group.name}</header>
-          <div class="overflow-x-auto">
+          <div class="overflow-x-auto" data-h-scroll>
             <table class="w-full text-sm">
               <thead class="bg-white/5 text-white/70">
                 <tr>
@@ -135,17 +202,8 @@
                   <tr class="border-t border-white/10">
                     <td class="px-2 py-2 text-center text-white/80">{row.position}</td>
                     <td class="px-2 py-2">
-                      <div class="mx-auto h-7 w-7 flex items-center justify-center overflow-hidden">
-                        {#if row.logo}
-                          <img
-                            src={row.logo}
-                            alt={row.team}
-                            class="h-7 w-7 object-contain"
-                            loading="lazy"
-                            decoding="async"
-                            style={getTeamLogoScaleStyleByAbbr(row.abbr)}
-                          />
-                        {/if}
+                      <div class="mx-auto h-10 w-10 flex items-center justify-center overflow-hidden">
+                        <TeamLogo abbr={row.abbr} className="h-9 w-9 object-contain" alt={row.team} />
                       </div>
                     </td>
                     <td class="px-3 py-2">{row.team}</td>

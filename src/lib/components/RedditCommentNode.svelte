@@ -18,6 +18,23 @@
   const MARKDOWN_LINK_RE = /(!)?\[([^\]]*)\]\(([^)\s]+)\)/gi;
 
   $: parsed = parseBody(comment?.body ?? '');
+  $: flairParts = Array.isArray(comment?.author_flair_richtext)
+    ? comment.author_flair_richtext
+        .filter((part) => part && (part.t || part.u))
+        .map((part) => ({
+          type: part.e === 'emoji' || part.u ? 'emoji' : 'text',
+          text: part.t || '',
+          url: part.u || ''
+        }))
+    : [];
+
+  function flairStyle() {
+    return 'background-color: #000000; color: inherit;';
+  }
+
+  function hasCustomFlairStyle(): boolean {
+    return true;
+  }
 
   function requestToggle(event?: Event): void {
     event?.stopPropagation();
@@ -160,7 +177,20 @@
   on:keydown={handleKeydown}
 >
   <div class="text-sm text-white/70">
-    {comment.author} • {comment.score} • {formatTimeAgo(comment.created_utc)} {comment._collapsed ? '• collapsed' : ''}
+    {comment.author}
+    {#if flairParts.some((part) => part.type === 'emoji' && part.url)}
+      <span
+        class={`ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded ${hasCustomFlairStyle() ? '' : 'text-white/50 bg-white/10'}`}
+        style={flairStyle()}
+      >
+        {#each flairParts as part, i (`${part.type}-${i}`)}
+          {#if part.type === 'emoji' && part.url}
+            <img src={part.url} alt={part.text || 'flair'} class="h-3 w-3 object-contain" loading="lazy" decoding="async" />
+          {/if}
+        {/each}
+      </span>
+    {/if}
+    • {comment.score} • {formatTimeAgo(comment.created_utc)} {comment._collapsed ? '• collapsed' : ''}
   </div>
   {#if !comment._collapsed}
     <div class="mt-1 break-words">

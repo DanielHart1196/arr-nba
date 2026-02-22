@@ -1,5 +1,16 @@
 import { apiCache } from '$lib/cache/api-cache';
 
+type SeasonLeadersPayload = {
+  season: string;
+  players: { headers: string[]; rows: any[] };
+  teams: { headers: string[]; rows: any[] };
+  stale?: boolean;
+  staleAgeMs?: number;
+};
+
+const lastGoodByKey = new Map<string, { data: SeasonLeadersPayload; ts: number }>();
+const LAST_GOOD_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
 function seasonFromDate(date = new Date()): string {
   const year = date.getFullYear();
   const month = date.getMonth() + 1;
@@ -67,7 +78,7 @@ export const GET = async ({ url }: any) => {
   const cacheKey = `season-stats:v2:${season}:${perMode}`;
 
   try {
-    const data = await apiCache.getOrFetch(
+    const data = await apiCache.getOrFetch<SeasonLeadersPayload>(
       cacheKey,
       async () => {
         const headers = buildHeaders();
@@ -92,17 +103,32 @@ export const GET = async ({ url }: any) => {
         const players = mapResult(playerJson);
         const teams = mapResult(teamJson);
 
-        return {
+        const payload: SeasonLeadersPayload = {
           season,
           players,
           teams
         };
+        lastGoodByKey.set(cacheKey, { data: payload, ts: Date.now() });
+        return payload;
       },
       10 * 60 * 1000
     );
 
     return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e: any) {
+    const lastGood = lastGoodByKey.get(cacheKey);
+    if (lastGood && Date.now() - lastGood.ts <= LAST_GOOD_MAX_AGE_MS) {
+      const stalePayload: SeasonLeadersPayload = {
+        ...lastGood.data,
+        stale: true,
+        staleAgeMs: Date.now() - lastGood.ts
+      };
+      return new Response(JSON.stringify(stalePayload), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'x-arrnba-stale': '1' }
+      });
+    }
+
     return new Response(JSON.stringify({ error: e?.message ?? 'unknown' }), {
       status: 500,
       headers: { 'content-type': 'application/json' }

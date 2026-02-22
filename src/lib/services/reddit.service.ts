@@ -248,6 +248,9 @@ export class RedditService {
   }
 
   async searchRedditThread(request: RedditSearchRequest): Promise<RedditSearchResponse> {
+    if (!request.eventDate || Number.isNaN(new Date(request.eventDate).getTime())) {
+      return { post: undefined };
+    }
     if (request.eventDate) {
       try {
         const datedMapping = await this.getRedditIndexForDate(request.eventDate);
@@ -289,7 +292,8 @@ export class RedditService {
       request.type,
       request.eventDate,
       request.awayCandidates,
-      request.homeCandidates
+      request.homeCandidates,
+      request.window
     );
     if (result?.post && request.eventId) {
       this.writeEventThreadCache(request.eventId, request.type, result.post);
@@ -306,6 +310,52 @@ export class RedditService {
     if (cached && !(cached instanceof Promise)) return cached;
 
     try {
+      const eventTs = request.eventDate ? new Date(request.eventDate).getTime() : NaN;
+      const hasEventDate = Number.isFinite(eventTs);
+      const eventAgeDays = hasEventDate ? Math.abs((Date.now() - eventTs) / (24 * 60 * 60 * 1000)) : 0;
+      const timeRange: 'week' | 'month' | 'year' = !hasEventDate
+        ? (request.type === 'post' ? 'year' : 'month')
+        : (eventAgeDays > 45 ? 'year' : (eventAgeDays > 7 ? 'month' : 'week'));
+      const sort: 'new' | 'relevance' = request.type === 'post' ? 'relevance' : 'new';
+      const query = this.buildSearchQuery(request);
+
+      let searchJson: any;
+      try {
+        searchJson = await this.dataSource.searchSubredditRaw(sub, query, timeRange, sort);
+      } catch (e: any) {
+        if (e.message.includes('403') || e.message.includes('429')) {
+          console.warn('Subreddit search blocked, falling back to feed-based search');
+          searchJson = null;
+        } else {
+          throw e;
+        }
+      }
+
+      if (searchJson) {
+        let result = this.transformer.transformSearch(
+          searchJson,
+          request.type,
+          request.eventDate,
+          request.awayCandidates,
+          request.homeCandidates,
+          request.window
+        );
+
+        if (!result?.post && request.type === 'post' && request.eventDate) {
+          result = this.transformer.transformSearch(
+            searchJson,
+            request.type,
+            request.eventDate,
+            request.awayCandidates,
+            request.homeCandidates,
+            { ...request.window, post: [0 * 3600, 12 * 3600] }
+          );
+        }
+
+        this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
+        return result;
+      }
+
       const [newFeed, hotFeed] = await Promise.all([
         this.dataSource.getSubredditFeed(sub, 'new'),
         this.dataSource.getSubredditFeed(sub, 'hot')
@@ -325,13 +375,26 @@ export class RedditService {
       });
 
       const wrappedJson = { data: { children: uniquePosts } };
-      const result = this.transformer.transformSearch(
+      let result = this.transformer.transformSearch(
         wrappedJson,
         request.type,
         request.eventDate,
         request.awayCandidates,
-        request.homeCandidates
+        request.homeCandidates,
+        request.window
       );
+
+      if (!result?.post && request.type === 'post' && request.eventDate) {
+        // Team subs often post PGTs earlier than 2 hours after tip; relax window if strict search fails.
+        result = this.transformer.transformSearch(
+          wrappedJson,
+          request.type,
+          request.eventDate,
+          request.awayCandidates,
+          request.homeCandidates,
+          { ...request.window, post: [0 * 3600, 12 * 3600] }
+        );
+      }
 
       this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
       return result;
@@ -382,7 +445,7 @@ export class RedditService {
   }
 
   async getRedditComments(postId: string, sort: 'new' | 'top' = 'new', permalink?: string, bypassCache: boolean = false): Promise<{ comments: RedditComment[] }> {
-    const cacheKey = `reddit:comments:${postId}:${sort}`;
+    const cacheKey = `reddit:comments:v2:${postId}:${sort}`;
     const ttl = sort === 'top' ? 120000 : 30000;
     
     // 1. Check local in-memory cache

@@ -68,6 +68,15 @@
   let collapsedByView: Record<string, Record<string, true>> = {};
   let scrollYByView: Record<string, number> = {};
   let activeViewKey = '';
+  let lastTeamsKey = '';
+  let lastAutoFetchKey = '';
+  let showDebug = false;
+  let lastEnsureKey = '';
+  let ensureQueued = false;
+  let ensureInFlight: Record<FeedMode, Record<ThreadSource, boolean>> = {
+    LIVE: { reddit: false, away: false, home: false },
+    POST: { reddit: false, away: false, home: false }
+  };
 
   function emptyModeCache(): ModeCache {
     return { thread: null, comments: [] };
@@ -133,6 +142,19 @@
     scrollYByView = deepClone(persisted.scrollYByView);
   }
 
+
+  async function withTimeout<T>(promise: Promise<T>, label: string, ms = 8000): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
   function persistUIState(): void {
     if (!eventId) return;
     try {
@@ -172,6 +194,14 @@
     return `arrnba:thread:${eventId || 'unknown'}:${targetMode}:${targetSource}`;
   }
 
+  function clearStoredThread(targetMode: FeedMode, targetSource: ThreadSource): void {
+    if (typeof window === 'undefined') return;
+    if (!eventId) return;
+    try {
+      localStorage.removeItem(sourceThreadStorageKey(targetMode, targetSource));
+    } catch {}
+  }
+
   function readStoredThread(targetMode: FeedMode, targetSource: ThreadSource): RedditPost | null {
     if (typeof window === 'undefined') return null;
     if (!eventId) return null;
@@ -194,6 +224,32 @@
     } catch {}
   }
 
+  function isThreadWithinWindow(post: RedditPost | null, targetMode: FeedMode, dateStr?: string): boolean {
+    if (!post || !dateStr) return false;
+    const targetMs = new Date(dateStr).getTime();
+    if (!Number.isFinite(targetMs)) return false;
+    const target = Math.floor(targetMs / 1000);
+    const targetDate = new Date(targetMs);
+    const dateOnly = targetDate.getUTCHours() === 0 && targetDate.getUTCMinutes() === 0 && targetDate.getUTCSeconds() === 0;
+    if (!post.created_utc) return true;
+    const created = Number(post.created_utc);
+    if (!Number.isFinite(created)) return false;
+    if (targetMode === 'LIVE') {
+      if (dateOnly) return created >= target - (12 * 3600) && created <= target + (12 * 3600);
+      return created >= target - (2 * 3600) && created <= target + (1 * 3600);
+    }
+    if (dateOnly) return created >= target + (0 * 3600) && created <= target + (24 * 3600);
+    return created >= target + (2 * 3600) && created <= target + (5 * 3600);
+  }
+
+  function formatCreatedUtc(post?: RedditPost | null): string {
+    const created = Number(post?.created_utc ?? 0);
+    if (!Number.isFinite(created) || created <= 0) return '';
+    return new Date(created * 1000).toISOString();
+  }
+
+  function debugLog(_message: string): void {}
+
   $: currentMode = mode === 'LIVE' || mode === 'POST' ? mode : null;
   $: currentSource = currentMode ? selectedSourceByMode[currentMode] : 'reddit';
   $: thread = currentMode ? cache[currentMode][currentSource].thread : null;
@@ -203,6 +259,7 @@
   $: homeSourceLabel = teamButtonLabel(homeName);
   $: awayLogoAbbr = resolveTeamLogoAbbr(awayName);
   $: homeLogoAbbr = resolveTeamLogoAbbr(homeName);
+  $: threadWithinWindow = currentMode ? isThreadWithinWindow(thread, currentMode, eventDate) : false;
 
   $: {
     const nextViewKey = currentMode ? makeViewKey(currentMode, currentSource) : '';
@@ -212,6 +269,18 @@
       saveActiveViewScroll();
       activeViewKey = nextViewKey;
       if (activeViewKey) void restoreScrollForView(activeViewKey);
+      loading = false;
+    }
+  }
+
+  $: if (currentMode && awayName && homeName) {
+    const key = `${awayName}|${homeName}`;
+    if (key !== lastTeamsKey) {
+      lastTeamsKey = key;
+      triedFetch[currentMode].reddit = false;
+      triedFetch[currentMode].away = false;
+      triedFetch[currentMode].home = false;
+      ensureActiveSourceLoaded(currentMode);
     }
   }
 
@@ -230,10 +299,15 @@
     if (!cache[targetMode][targetSource].comments.length) {
       loading = true;
     }
+    debugLog(`fetchCommentsFor ${targetMode}/${targetSource} id=${post.id} sort=${sort} force=${forceRefresh}`);
 
     try {
-      const result = await nbaService.getRedditComments(post.id, sort, post.permalink, forceRefresh);
+      let result = await nbaService.getRedditComments(post.id, sort, post.permalink, forceRefresh);
+      if (!forceRefresh && (result.comments?.length ?? 0) === 0) {
+        result = await nbaService.getRedditComments(post.id, sort, post.permalink, true);
+      }
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
+      debugLog(`commentsResult ${targetMode}/${targetSource} id=${post.id} count=${result.comments?.length ?? 0}`);
       const nextComments = sortedCopy(result.comments ?? [], sortChoice);
       applyCollapsedMap(nextComments, collapsedByView[makeViewKey(targetMode, targetSource)] ?? {});
       cache[targetMode][targetSource].comments = nextComments;
@@ -243,6 +317,7 @@
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
       console.error('Failed to fetch comments:', error);
       errorMsg = error instanceof Error ? error.message : 'Failed to fetch comments';
+      debugLog(`commentsError ${targetMode}/${targetSource} id=${post.id} ${errorMsg}`);
     } finally {
       if (requestId === commentsRequestSeq && mode === targetMode && selectedSourceByMode[targetMode] === targetSource) loading = false;
     }
@@ -268,6 +343,8 @@
       ['hawks', 'AtlantaHawks'],
       ['celtics', 'bostonceltics'],
       ['nets', 'GoNets'],
+      ['bknets', 'GoNets'],
+      ['brooklyn', 'GoNets'],
       ['hornets', 'CharlotteHornets'],
       ['bulls', 'chicagobulls'],
       ['cavaliers', 'clevelandcavs'],
@@ -352,7 +429,17 @@
   }
 
   async function ensureRedditThreadAndComments(targetMode: FeedMode): Promise<void> {
+    if (!awayName || !homeName) return;
     const targetSource: ThreadSource = 'reddit';
+    if (ensureInFlight[targetMode][targetSource]) return;
+    ensureInFlight[targetMode][targetSource] = true;
+    debugLog(`ensureReddit start ${targetMode}`);
+    const watchdog = setTimeout(() => {
+      if (ensureInFlight[targetMode][targetSource]) {
+        ensureInFlight[targetMode][targetSource] = false;
+        debugLog(`ensureReddit timeout ${targetMode}`);
+      }
+    }, 10000);
     const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
     const eventAgeDays = (() => {
       if (!eventDate) return 0;
@@ -364,15 +451,28 @@
 
     try {
       let post: RedditPost | null = readStoredThread(targetMode, targetSource);
+      if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
+        post = null;
+        clearStoredThread(targetMode, targetSource);
+      }
       if (eventId) {
         const eventCached = nbaService.getCachedThreadForEvent(eventId, targetMode === 'POST' ? 'post' : 'live');
-        if (eventCached) post = eventCached;
+        if (eventCached && (!eventDate || isThreadWithinWindow(eventCached, targetMode, eventDate))) {
+          post = eventCached;
+        }
       }
 
       if (!post && !preferDirectSearch) {
-        const mapping = await nbaService.getRedditIndex();
-        const entry = mapping[createPairKey(awayName, homeName)];
-        post = (targetMode === 'POST' ? entry?.pgt : entry?.gdt) ?? null;
+        try {
+          const mapping = await withTimeout(nbaService.getRedditIndex(), 'redditIndex');
+          const entry = mapping[createPairKey(awayName, homeName)];
+          post = (targetMode === 'POST' ? entry?.pgt : entry?.gdt) ?? null;
+          if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
+            post = null;
+          }
+        } catch (error) {
+          debugLog(`redditIndex failed ${(error as Error)?.message ?? 'unknown'}`);
+        }
       }
 
       if (post) {
@@ -397,13 +497,16 @@
         lastFetchAttemptAt[targetMode][targetSource] = Date.now();
         if (!cache[targetMode][targetSource].thread) loading = true;
 
-        const result = await nbaService.searchRedditThread({
-          type: targetMode === 'POST' ? 'post' : 'live',
-          awayCandidates: [awayName],
-          homeCandidates: [homeName],
-          eventDate,
-          eventId
-        });
+        const result = await withTimeout(
+          nbaService.searchRedditThread({
+            type: targetMode === 'POST' ? 'post' : 'live',
+            awayCandidates: [awayName],
+            homeCandidates: [homeName],
+            eventDate,
+            eventId
+          }),
+          'redditSearch'
+        );
         post = result?.post ?? null;
 
         if (post) {
@@ -428,6 +531,11 @@
       console.error(`Error ensuring ${targetMode} r/nba thread:`, error);
       triedFetch[targetMode][targetSource] = false;
       if (mode === targetMode) loading = false;
+      debugLog(`ensureReddit error ${targetMode} ${(error as Error)?.message ?? 'unknown'}`);
+    } finally {
+      clearTimeout(watchdog);
+      ensureInFlight[targetMode][targetSource] = false;
+      debugLog(`ensureReddit done ${targetMode}`);
     }
   }
 
@@ -443,13 +551,16 @@
     lastFetchAttemptAt[targetMode][targetSource] = Date.now();
 
     try {
-      const result = await nbaService.searchSubredditThread(subreddit, {
-        type: targetMode === 'POST' ? 'post' : 'live',
-        awayCandidates: [awayName],
-        homeCandidates: [homeName],
-        eventDate,
-        eventId
-      });
+      const result = await withTimeout(
+        nbaService.searchSubredditThread(subreddit, {
+          type: targetMode === 'POST' ? 'post' : 'live',
+          awayCandidates: [awayName],
+          homeCandidates: [homeName],
+          eventDate,
+          eventId
+        }),
+        `subredditSearch:${subreddit}`
+      );
 
       const post = result?.post ?? null;
       cache[targetMode][targetSource].thread = post;
@@ -479,20 +590,39 @@
   async function ensureTeamThreadAndComments(targetMode: FeedMode, targetSource: 'away' | 'home'): Promise<void> {
     const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
     const subreddit = sourceToSubreddit(targetSource);
+    if (ensureInFlight[targetMode][targetSource]) return;
+    ensureInFlight[targetMode][targetSource] = true;
+    debugLog(`ensureTeam start ${targetMode}/${targetSource}`);
+    const watchdog = setTimeout(() => {
+      if (ensureInFlight[targetMode][targetSource]) {
+        ensureInFlight[targetMode][targetSource] = false;
+        debugLog(`ensureTeam timeout ${targetMode}/${targetSource}`);
+      }
+    }, 10000);
     if (!subreddit) {
       cache[targetMode][targetSource].thread = null;
       cache[targetMode][targetSource].comments = [];
       cache = { ...cache };
       loading = false;
+      ensureInFlight[targetMode][targetSource] = false;
+      clearTimeout(watchdog);
+      debugLog(`ensureTeam done ${targetMode}/${targetSource} (no subreddit)`);
       return;
     }
 
-    const existing = cache[targetMode][targetSource].thread ?? readStoredThread(targetMode, targetSource);
+    let existing = cache[targetMode][targetSource].thread ?? readStoredThread(targetMode, targetSource);
+    if (eventDate && !isThreadWithinWindow(existing, targetMode, eventDate)) {
+      existing = null;
+      clearStoredThread(targetMode, targetSource);
+    }
     if (existing) {
       cache[targetMode][targetSource].thread = existing;
       cache = { ...cache };
       if (activeViewKey === makeViewKey(targetMode, targetSource)) void restoreScrollForView(activeViewKey);
       await fetchCommentsFor(existing, sort, targetMode, targetSource);
+      ensureInFlight[targetMode][targetSource] = false;
+      clearTimeout(watchdog);
+      debugLog(`ensureTeam done ${targetMode}/${targetSource} (cached)`);
       return;
     }
 
@@ -506,6 +636,9 @@
 
     if (triedFetch[targetMode][targetSource]) {
       loading = false;
+      ensureInFlight[targetMode][targetSource] = false;
+      clearTimeout(watchdog);
+      debugLog(`ensureTeam done ${targetMode}/${targetSource} (tried)`);
       return;
     }
 
@@ -539,16 +672,38 @@
       errorMsg = error instanceof Error ? error.message : `Failed to load r/${subreddit} thread`;
       triedFetch[targetMode][targetSource] = false;
       loading = false;
+      debugLog(`ensureTeam error ${targetMode}/${targetSource} ${(error as Error)?.message ?? 'unknown'}`);
+    } finally {
+      clearTimeout(watchdog);
+      ensureInFlight[targetMode][targetSource] = false;
+      debugLog(`ensureTeam done ${targetMode}/${targetSource}`);
     }
   }
 
   async function ensureActiveSourceLoaded(targetMode: FeedMode): Promise<void> {
     const source = selectedSourceByMode[targetMode];
+    debugLog(`ensureActive ${targetMode}/${source}`);
     if (source === 'reddit') {
       await ensureRedditThreadAndComments(targetMode);
       return;
     }
     await ensureTeamThreadAndComments(targetMode, source);
+  }
+
+  function scheduleEnsure(targetMode: FeedMode): void {
+    const source = selectedSourceByMode[targetMode];
+    if (ensureInFlight[targetMode][source]) return;
+    const key = `${targetMode}:${source}:${awayName}|${homeName}:${eventDate ?? ''}`;
+    if (key === lastEnsureKey) return;
+    lastEnsureKey = key;
+    if (ensureQueued) return;
+    ensureQueued = true;
+    debugLog(`scheduleEnsure ${key}`);
+    setTimeout(() => {
+      ensureQueued = false;
+      debugLog(`scheduleEnsure run ${key}`);
+      ensureActiveSourceLoaded(targetMode);
+    }, 0);
   }
 
   async function handleSourceClick(source: ThreadSource): Promise<void> {
@@ -571,12 +726,21 @@
   $: if (mode === 'LIVE' || mode === 'POST') {
     const defaultSort: SortChoice = mode === 'POST' ? 'top' : 'new';
     sortChoice = defaultSort;
-    ensureActiveSourceLoaded(mode);
+    scheduleEnsure(mode);
   } else {
     loading = false;
   }
   $: onSourceChange({ mode: 'LIVE', source: selectedSourceByMode.LIVE });
   $: onSourceChange({ mode: 'POST', source: selectedSourceByMode.POST });
+
+  $: if (currentMode && thread?.id && (comments?.length ?? 0) === 0) {
+    const key = `${currentMode}:${currentSource}:${thread.id}`;
+    if (key !== lastAutoFetchKey) {
+      lastAutoFetchKey = key;
+      const sort: SortChoice = currentMode === 'POST' ? 'top' : 'new';
+      fetchCommentsFor(thread, sort, currentMode, currentSource, true);
+    }
+  }
 
   function toggleCommentById(id: string): void {
     if (!currentMode || !id) return;
@@ -659,7 +823,7 @@
   });
 </script>
 
-<div class="min-w-0 overflow-x-hidden">
+<div class="min-w-0 overflow-x-hidden pr-1">
   <div class="flex items-center justify-between mb-3">
     <div class="flex items-center gap-2 text-xs font-semibold">
       <button class="px-3 py-1 rounded {sortChoice === 'new' ? 'bg-white/25 text-white' : 'bg-black text-white border border-white/20'}" on:click={() => { sortChoice = 'new'; reorder(); }}>NEW</button>
@@ -731,7 +895,7 @@
       <div class="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></div>
       Loading comments...
     </div>
-  {:else if !thread}
+  {:else if !thread && !hasVisibleComments}
     <div class="text-white/70">No comments yet.</div>
   {:else}
     <div class="space-y-3">

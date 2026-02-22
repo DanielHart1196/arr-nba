@@ -17,6 +17,12 @@ export interface IRedditDataSource {
     timeRange?: 'day' | 'week' | 'month' | 'year' | 'all',
     sort?: 'new' | 'relevance'
   ): Promise<any>;
+  searchSubredditRaw(
+    subreddit: string,
+    query: string,
+    timeRange?: 'day' | 'week' | 'month' | 'year' | 'all',
+    sort?: 'new' | 'relevance'
+  ): Promise<any>;
   getCommentsRaw(postId: string, sort: string, permalink?: string): Promise<any>;
   getThreadContent(permalink: string): Promise<any>;
   getSubredditFeed(subreddit: string, sort?: 'new' | 'hot'): Promise<any>;

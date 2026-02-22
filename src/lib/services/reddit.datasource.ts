@@ -5,38 +5,58 @@ export class RedditDataSource implements IRedditDataSource {
   private readonly BASE_URL = '/api/reddit';
   private readonly USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 (arr-nba app)';
   private readonly JSON_HEADERS = { 'Accept': 'application/json' };
+  private readonly FETCH_TIMEOUT_MS = 8000;
 
   private isBrowser(): boolean {
     return typeof window !== 'undefined';
   }
 
   private async fetchJson(url: string, init?: RequestInit): Promise<any> {
-    const res = await fetch(url, init);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async fetchRedditServer(url: string, context: string): Promise<any> {
     console.log(`Fetching ${context} from: ${url}`);
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': this.USER_AGENT,
-        ...this.JSON_HEADERS
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': this.USER_AGENT,
+          ...this.JSON_HEADERS
+        },
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`${context} error ${res.status}: ${text.slice(0, 100)}`);
+        throw new Error(`${context} error: ${res.status}`);
       }
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`${context} error ${res.status}: ${text.slice(0, 100)}`);
-      throw new Error(`${context} error: ${res.status}`);
+      return res.json();
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return res.json();
   }
 
   private async fetchViaProxy(url: string, context: string): Promise<any> {
     const proxyUrl = `${this.BASE_URL}/proxy?url=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl, { headers: this.JSON_HEADERS });
-    if (!res.ok) throw new Error(`${context} proxy error: ${res.status}`);
-    return res.json();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(proxyUrl, { headers: this.JSON_HEADERS, signal: controller.signal });
+      if (!res.ok) throw new Error(`${context} proxy error: ${res.status}`);
+      return res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async fetchRedditBrowserFirst(url: string, context: string): Promise<any> {
@@ -63,6 +83,17 @@ export class RedditDataSource implements IRedditDataSource {
     const url = `https://www.reddit.com/r/nba/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=${sort}&t=${timeRange}`;
     if (this.isBrowser()) return this.fetchRedditBrowserFirst(url, 'Reddit Search');
     return this.fetchRedditServer(url, 'Reddit Search');
+  }
+
+  async searchSubredditRaw(
+    subreddit: string,
+    query: string,
+    timeRange: 'day' | 'week' | 'month' | 'year' | 'all' = 'week',
+    sort: 'new' | 'relevance' = 'new'
+  ): Promise<any> {
+    const url = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=${sort}&t=${timeRange}`;
+    if (this.isBrowser()) return this.fetchRedditBrowserFirst(url, 'Reddit Subreddit Search');
+    return this.fetchRedditServer(url, 'Reddit Subreddit Search');
   }
 
   async getCommentsRaw(postId: string, sort: string, permalink?: string): Promise<any> {

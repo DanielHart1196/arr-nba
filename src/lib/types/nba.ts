@@ -119,6 +119,10 @@ export interface RedditPost {
 export interface RedditComment {
   id: string;
   author: string;
+  author_flair_text?: string;
+  author_flair_text_color?: string;
+  author_flair_background_color?: string;
+  author_flair_richtext?: Array<{ e?: string; t?: string; u?: string }>;
   body: string;
   score: number;
   created_utc: number;
@@ -139,6 +143,11 @@ export interface RedditSearchRequest {
   homeCandidates: string[];
   eventDate?: string;
   eventId?: string;
+  // Override time windows (seconds relative to event start).
+  window?: {
+    live?: [number, number];
+    post?: [number, number];
+  };
 }
 
 export interface RedditSearchResponse {

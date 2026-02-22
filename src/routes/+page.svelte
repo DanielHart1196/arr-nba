@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { goto, preloadCode, preloadData } from '$app/navigation';
   import { nbaService } from '../lib/services/nba.service';
-  import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoScaleStyleByAbbr } from '../lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPath } from '../lib/utils/team.utils';
+  import TeamLogo from '../lib/components/TeamLogo.svelte';
   import { addDays, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
   import { createTouchGestures } from '../lib/composables/touch-gestures';
   import type { Event as NBAEvent } from '../lib/types/nba';
@@ -94,7 +95,11 @@
   let lastOpenAt = 0;
   let lastPickerOpenAt = 0;
   let datePickerInput: HTMLInputElement | null = null;
+  let menuPrefetchStarted = false;
   let menuOpen = false;
+  let menuButtonEl: HTMLButtonElement | null = null;
+  let menuPanelEl: HTMLDivElement | null = null;
+  let menuListenersActive = false;
 
   function getInitialEventsFromSession(index: number): NBAEvent[] | null {
     if (typeof window === 'undefined') return null;
@@ -424,13 +429,62 @@
     openDatePicker();
   }
 
-  function toggleMenu() {
+  function prefetchMenuRoutes() {
+    if (menuPrefetchStarted || typeof window === 'undefined') return;
+    menuPrefetchStarted = true;
+    const routes = ['/standings', '/stats'];
+    const runPrefetch = () => {
+      routes.forEach((route) => {
+        preloadCode(route).catch(() => {});
+        preloadData(route).catch(() => {});
+      });
+    };
+    if ('requestIdleCallback' in window) {
+      (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback?.(runPrefetch, { timeout: 1400 });
+    } else {
+      setTimeout(runPrefetch, 0);
+    }
+  }
+
+  function toggleMenu(): void {
     menuOpen = !menuOpen;
   }
 
-  function closeMenu() {
+  function closeMenu(): void {
     menuOpen = false;
   }
+
+  function handleOutsideMenuEvent(event: Event): void {
+    if (!menuOpen) return;
+    const target = event.target as Node | null;
+    if (menuPanelEl && target && menuPanelEl.contains(target)) return;
+    if (menuButtonEl && target && menuButtonEl.contains(target)) return;
+    menuOpen = false;
+  }
+
+  function addMenuOutsideListeners(): void {
+    if (menuListenersActive || typeof window === 'undefined') return;
+    menuListenersActive = true;
+    window.addEventListener('pointerdown', handleOutsideMenuEvent, { capture: true, passive: true });
+    window.addEventListener('wheel', handleOutsideMenuEvent, { capture: true, passive: true });
+    window.addEventListener('touchstart', handleOutsideMenuEvent, { capture: true, passive: true });
+  }
+
+  function removeMenuOutsideListeners(): void {
+    if (!menuListenersActive || typeof window === 'undefined') return;
+    menuListenersActive = false;
+    window.removeEventListener('pointerdown', handleOutsideMenuEvent, { capture: true });
+    window.removeEventListener('wheel', handleOutsideMenuEvent, { capture: true });
+    window.removeEventListener('touchstart', handleOutsideMenuEvent, { capture: true });
+  }
+
+  function navigateFromMenu(path: string) {
+    closeMenu();
+    requestAnimationFrame(() => {
+      goto(path);
+    });
+  }
+
 
   function handleDatePicked(value: string) {
     const picked = parseLocalDateKey(value);
@@ -665,7 +719,15 @@
       threshold: 50
     });
 
+    prefetchMenuRoutes();
+    addMenuOutsideListeners();
   });
+
+  $: if (menuOpen) {
+    addMenuOutsideListeners();
+  } else {
+    removeMenuOutsideListeners();
+  }
 
   onDestroy(() => {
     if (interval) clearInterval(interval);
@@ -674,43 +736,8 @@
 </script>
 
 <div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
-  <div class="grid grid-cols-[1fr_auto_1fr] items-end mb-4" data-no-swipe="true">
-    <div class="justify-self-start relative" data-no-swipe="true">
-      <button
-        data-no-swipe="true"
-        type="button"
-        aria-label="Open menu"
-        aria-expanded={menuOpen}
-        class="h-9 w-9 rounded border border-white/15 bg-white/5 hover:bg-white/10 flex items-center justify-center"
-        on:click|preventDefault={toggleMenu}
-      >
-        <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M4 7h16M4 12h16M4 17h16"></path>
-        </svg>
-      </button>
-      {#if menuOpen}
-        <div class="absolute left-0 top-11 z-20 w-44 rounded border border-white/15 bg-[#121212] shadow-lg" data-no-swipe="true">
-          <a
-            data-no-swipe="true"
-            href="/standings"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
-            on:click={closeMenu}
-          >
-            Standings
-          </a>
-          <a
-            data-no-swipe="true"
-            href="/stats"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
-            on:click={closeMenu}
-          >
-            Stats
-          </a>
-        </div>
-      {/if}
-    </div>
-    <div class="justify-self-center" data-no-swipe="true">
-      <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden">
+  <div class="flex items-center justify-end gap-3 mb-4" data-no-swipe="true">
+    <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden" data-no-swipe="true">
         <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
         <button
           data-no-swipe="true"
@@ -732,25 +759,72 @@
         />
         <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-l border-white/10" on:pointerup={() => requestDateDelta(1)} on:click={() => requestDateDelta(1)}>&gt;</button>
       </div>
-    </div>
-    <div class="justify-self-end" data-no-swipe="true">
-      <div class="flex flex-col items-center gap-1 select-none">
-        <span class="text-[11px] text-white/70 leading-none">Scores</span>
-        <button
+    <button
+      data-no-swipe="true"
+      type="button"
+      role="switch"
+      aria-label="Toggle scores visibility"
+      aria-checked={!hideScores}
+      class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
+      style="touch-action: manipulation;"
+      on:click|preventDefault={requestToggleHide}
+    >
+      <span
+        class="pointer-events-none absolute left-[2px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-transform duration-200 {hideScores ? '' : 'translate-x-5'}"
+      ></span>
+    </button>
+    <div class="relative flex items-center" data-no-swipe="true">
+      <button
+        data-no-swipe="true"
+        type="button"
+        aria-label="Open menu"
+        aria-expanded={menuOpen}
+        class="h-7 w-7 flex items-center justify-center text-white/80 hover:text-white"
+        on:click|preventDefault={toggleMenu}
+        bind:this={menuButtonEl}
+      >
+        <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16"></path>
+        </svg>
+      </button>
+      {#if menuOpen}
+        <div
+          class="absolute right-0 top-10 z-[999] w-44 rounded border border-white/15 bg-[#121212] shadow-lg"
           data-no-swipe="true"
-          type="button"
-          role="switch"
-          aria-label="Toggle scores visibility"
-          aria-checked={!hideScores}
-          class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
-          style="touch-action: manipulation;"
-          on:click|preventDefault={requestToggleHide}
+          bind:this={menuPanelEl}
         >
-          <span
-            class="pointer-events-none absolute left-[2px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-transform duration-200 {hideScores ? '' : 'translate-x-5'}"
-          ></span>
-        </button>
-      </div>
+          <a
+            data-no-swipe="true"
+            href="/"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
+            data-sveltekit-preload-data="tap"
+            data-sveltekit-preload-code="tap"
+            on:click|preventDefault={() => navigateFromMenu('/')}
+          >
+            Scoreboard
+          </a>
+          <a
+            data-no-swipe="true"
+            href="/standings"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            data-sveltekit-preload-data="tap"
+            data-sveltekit-preload-code="tap"
+            on:click|preventDefault={() => navigateFromMenu('/standings')}
+          >
+            Standings
+          </a>
+          <a
+            data-no-swipe="true"
+            href="/stats"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            data-sveltekit-preload-data="tap"
+            data-sveltekit-preload-code="tap"
+            on:click|preventDefault={() => navigateFromMenu('/stats')}
+          >
+            Stats
+          </a>
+        </div>
+      {/if}
     </div>
   </div>
   <div class="relative overflow-hidden" bind:clientWidth={cardsViewportWidth}>
@@ -771,29 +845,13 @@
                   <a href={`/game/${game.id}`} on:mouseenter={() => prewarmGameData(game)} on:pointerdown={() => prewarmGameData(game)} on:touchstart={() => prewarmGameData(game)} on:pointerup={() => openGame(game.id)} on:click|preventDefault={() => openGame(game.id)} class="block border rounded p-3 {isCloseGame(game.event) ? 'border-red-500/80 hover:border-red-400' : 'border-white/10 hover:border-white/20'}" style="touch-action: manipulation;">
                     <div class="grid grid-cols-[auto_1fr_auto_1fr_auto] gap-x-2 items-center">
                       <div class="row-span-2 justify-self-center h-12 w-12 flex items-center justify-center overflow-hidden">
-                        <img
-                          src={game.awayLogo}
-                          alt="away"
-                          class="h-12 w-12 object-contain"
-                          loading="lazy"
-                          decoding="async"
-                          style={getTeamLogoScaleStyleByAbbr(game.awayAbbr)}
-                          on:error={hideBrokenImage}
-                        />
+                        <TeamLogo abbr={game.awayAbbr} className="h-12 w-12 object-contain" alt="away" />
                       </div>
                       <div class="text-center font-medium">{game.awayAbbr}</div>
                       <div class="text-center text-white/70 font-medium">@</div>
                       <div class="text-center font-medium">{game.homeAbbr}</div>
                       <div class="row-span-2 justify-self-center h-12 w-12 flex items-center justify-center overflow-hidden">
-                        <img
-                          src={game.homeLogo}
-                          alt="home"
-                          class="h-12 w-12 object-contain"
-                          loading="lazy"
-                          decoding="async"
-                          style={getTeamLogoScaleStyleByAbbr(game.homeAbbr)}
-                          on:error={hideBrokenImage}
-                        />
+                        <TeamLogo abbr={game.homeAbbr} className="h-12 w-12 object-contain" alt="home" />
                       </div>
                       <div class="text-center">{(game.scheduled || hideScores) ? '-' : game.awayScore}</div>
                       <div class="text-center text-white/70 whitespace-nowrap">{game.statusText}</div>

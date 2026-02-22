@@ -15,3 +15,12 @@
   background-color: black;
   z-index: 2;
 }
+
+[data-h-scroll] {
+  overscroll-behavior-x: contain;
+}
+
+html,
+body {
+  overscroll-behavior-y: none;
+}

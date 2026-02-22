@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { closeSeasonStatsModal, seasonStatsModal } from '../../stores/seasonStatsModal.store';
+  import TeamLogo from '../TeamLogo.svelte';
 
   let headshotSrc = '';
   let fallbackIndex = 0;
@@ -52,16 +53,62 @@
   function displayHeader(header: string): string {
     const upper = String(header || '').toUpperCase();
     if (upper === 'PLUS_MINUS') return '+/-';
+    if (upper === 'W-L') return 'W-L';
+    if (upper === 'W_PCT') return 'W%';
     if (upper === 'FG3M') return '3PM';
     if (upper === 'FG3A') return '3PA';
     if (upper === 'FG_PCT') return 'FG';
     if (upper === 'FG3_PCT') return '3P';
     if (upper === 'FT_PCT') return 'FT';
+    if (upper === 'BLKA') return 'BA';
     return String(header || '');
+  }
+
+  function normalizeHeaders(headers: string[]): string[] {
+    if (!Array.isArray(headers)) return [];
+    const upper = headers.map((h) => String(h || '').toUpperCase());
+    const hasW = upper.includes('W');
+    const hasL = upper.includes('L');
+    if (!hasW || !hasL) return headers;
+    const out: string[] = [];
+    headers.forEach((h, idx) => {
+      const key = upper[idx];
+      if (key === 'L') return;
+      if (key === 'W') {
+        out.push('W-L');
+        return;
+      }
+      out.push(h);
+    });
+    return out;
+  }
+
+  function columnWidth(header: string): string {
+    const upper = String(header || '').toUpperCase();
+    if (upper === 'AGE' || upper === 'GP') return '1.6rem';
+    if (upper === 'W-L') return '2.8rem';
+    return '2.25rem';
+  }
+
+  function formatModalValue(header: string, row: Record<string, any> | null): string {
+    const upper = String(header || '').toUpperCase();
+    if (upper === 'W-L') {
+      const w = row?.W ?? '-';
+      const l = row?.L ?? '-';
+      return `${w}-${l}`;
+    }
+    return formatColumnValue(header, row?.[header]);
   }
 
   function formatSeasonLabel(season: string): string {
     return season ? season.replace('-', '/') : '';
+  }
+
+  function historyTeamLabel(row: Record<string, any> | null): string {
+    if (!row) return '-';
+    const abbr = String(row.TEAM_ABBREVIATION ?? '').trim();
+    if (!abbr) return '-';
+    return abbr;
   }
 
   function formatTriplePct(row: Record<string, any> | null): string {
@@ -78,6 +125,7 @@
   }
 
   $: visibleHistory = trimHistory($seasonStatsModal.historyRows ?? []);
+  $: modalHeaders = normalizeHeaders($seasonStatsModal.headers ?? []);
 
   $: if ($seasonStatsModal.open) {
     tick();
@@ -117,14 +165,22 @@
             {/if}
             <div class="min-w-0">
               <div class="text-base font-semibold text-white truncate">{$seasonStatsModal.player.name}</div>
-              <div class="text-xs text-white/60">
-                {#if $seasonStatsModal.team}{$seasonStatsModal.team}{/if}
-                {#if $seasonStatsModal.team && $seasonStatsModal.player.position} · {/if}
-                {#if $seasonStatsModal.player.position}{$seasonStatsModal.player.position}{/if}
-                {#if ($seasonStatsModal.team || $seasonStatsModal.player.position) && $seasonStatsModal.player.jersey} · {/if}
-                {#if $seasonStatsModal.player.jersey}#{$seasonStatsModal.player.jersey}{/if}
-                {#if ($seasonStatsModal.team || $seasonStatsModal.player.position || $seasonStatsModal.player.jersey) && $seasonStatsModal.seasonLabel} · {/if}
-                {#if $seasonStatsModal.seasonLabel}{$seasonStatsModal.seasonLabel}{/if}
+              <div class="text-xs text-white/60 flex flex-col">
+                <div class="inline-flex items-center gap-1">
+                  {#if $seasonStatsModal.team}
+                    <span class="inline-flex items-center gap-1">
+                      <TeamLogo abbr={$seasonStatsModal.team} className="h-3 w-3" alt={$seasonStatsModal.team} />
+                      <span>{$seasonStatsModal.team}</span>
+                    </span>
+                  {/if}
+                  {#if $seasonStatsModal.team && $seasonStatsModal.player.position} · {/if}
+                  {#if $seasonStatsModal.player.position}{$seasonStatsModal.player.position}{/if}
+                  {#if ($seasonStatsModal.team || $seasonStatsModal.player.position) && $seasonStatsModal.player.jersey} · {/if}
+                  {#if $seasonStatsModal.player.jersey}#{$seasonStatsModal.player.jersey}{/if}
+                </div>
+                {#if $seasonStatsModal.seasonLabel}
+                  <div>{$seasonStatsModal.seasonLabel}</div>
+                {/if}
               </div>
             </div>
           </div>
@@ -146,18 +202,18 @@
                   {$seasonStatsModal.seasonLabel || 'Season Stats'}
                 </div>
                 <div class="relative rounded border border-white/10">
-                  <div class="overflow-x-auto">
+                  <div class="overflow-x-auto" data-h-scroll>
                     <div
                       class="grid text-[11px] text-white/80"
-                      style="width:max-content; grid-template-columns: repeat({$seasonStatsModal.headers.length}, 2.25rem)"
+                      style="width:max-content; grid-template-columns: {modalHeaders.map((h) => columnWidth(h)).join(' ')}"
                     >
-                      {#each $seasonStatsModal.headers as header}
+                      {#each modalHeaders as header}
                         <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px]">
                           {displayHeader(header)}
                         </div>
                       {/each}
-                      {#each $seasonStatsModal.headers as header}
-                        <div class="py-1 text-center">{formatColumnValue(header, $seasonStatsModal.row?.[header])}</div>
+                      {#each modalHeaders as header}
+                        <div class="py-1 text-center">{formatModalValue(header, $seasonStatsModal.row)}</div>
                       {/each}
                     </div>
                   </div>
@@ -173,23 +229,27 @@
               {:else if visibleHistory.length}
                 {#key $seasonStatsModal.playerId}
                   <div class="rounded border border-white/10">
-                    <div class="max-h-[26vh] overflow-auto">
+                    <div class="max-h-[26vh] overflow-auto" data-h-scroll>
                       <div
                         class="grid text-[11px] text-white/80"
-                        style="width:max-content; grid-template-columns: 3.25rem repeat({$seasonStatsModal.headers.length}, 2.25rem)"
+                        style="width:max-content; grid-template-columns: 3.25rem 2.5rem {modalHeaders.map((h) => columnWidth(h)).join(' ')}"
                       >
                         <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px] bg-[#0e0e0e] sticky top-0 left-0 z-30">SEASON</div>
-                        {#each $seasonStatsModal.headers as header}
+                        <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px] bg-[#0e0e0e] sticky top-0 z-20">TEAM</div>
+                        {#each modalHeaders as header}
                           <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px] bg-[#0e0e0e] sticky top-0 z-20">
                             {displayHeader(header)}
                           </div>
                         {/each}
                         {#each visibleHistory as entry}
-                          <div class="py-1 text-center text-[10px] text-white/60 bg-[#0e0e0e] sticky left-0 z-10">
+                          <div class="py-1 text-center text-[10px] text-white/60 bg-[#0e0e0e] sticky left-0 z-20">
                             {formatSeasonLabel(entry.season)}
                           </div>
-                          {#each $seasonStatsModal.headers as header}
-                            <div class="py-1 text-center">{formatColumnValue(header, entry.row?.[header])}</div>
+                          <div class="py-1 text-center text-[10px] text-white/70 bg-[#0e0e0e]">
+                            {historyTeamLabel(entry.row)}
+                          </div>
+                          {#each modalHeaders as header}
+                            <div class="py-1 text-center">{formatModalValue(header, entry.row)}</div>
                           {/each}
                         {/each}
                       </div>

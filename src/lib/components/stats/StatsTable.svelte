@@ -87,7 +87,7 @@
   const SEASON_CACHE_KEY = 'arrnba:season-leaders-cache';
   const SEASON_CACHE_TTL_MS = 10 * 60 * 1000;
   const historyCache = new Map<string, { rows: { season: string; row: Record<string, any> | null }[]; headers: string[] }>();
-  const HISTORY_STATIC_KEY = 'arrnba:season-history-static:v1';
+  const HISTORY_STATIC_KEY = 'arrnba:season-history-static:v3';
   let staticHistory: { seasons: { season: string; players: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } } }[] } | null = null;
 
   const unsubscribeModal = seasonStatsModal.subscribe((state) => {
@@ -137,9 +137,13 @@
       const res = await fetch('/api/season-leaders');
       const json = await res.json();
       if (!res.ok || json?.error) {
-        seasonError = json?.error ?? `Failed to load season stats (${res.status})`;
-        seasonData = null;
-        updateSeasonStatsModal({ error: seasonError, loading: false });
+        if (!seasonData) {
+          seasonError = json?.error ?? `Failed to load season stats (${res.status})`;
+          seasonData = null;
+          updateSeasonStatsModal({ error: seasonError, loading: false });
+        } else {
+          updateSeasonStatsModal({ loading: false });
+        }
         return;
       }
       seasonData = json;
@@ -147,9 +151,11 @@
         writeSeasonCache(json);
       }
     } catch (e: any) {
-      seasonError = e?.message ?? 'Failed to load season stats';
-      seasonData = null;
-      updateSeasonStatsModal({ error: seasonError });
+      if (!seasonData) {
+        seasonError = e?.message ?? 'Failed to load season stats';
+        seasonData = null;
+        updateSeasonStatsModal({ error: seasonError });
+      }
     } finally {
       seasonLoading = false;
       updateSeasonStatsModal({ loading: false });
@@ -247,7 +253,7 @@
         staticHistory = readStaticHistory();
       }
       if (!staticHistory) {
-        const res = await fetch('/season-history.json');
+        const res = await fetch('/season-history.json?v=3');
         if (!res.ok) throw new Error(`Season history error: ${res.status}`);
         const json = await res.json();
         if (!Array.isArray(json?.seasons)) throw new Error('Season history data invalid');
@@ -324,7 +330,7 @@
       {/each}
       <div class="border-t-2 border-white/20 px-1 py-1 font-semibold text-left">TOTAL</div>
     </div>
-    <div class="overflow-x-auto" data-scrollable="true">
+  <div class="overflow-x-auto" data-scrollable="true" data-h-scroll>
       <div class="grid border-b-2 border-white/20" style="width:max-content; grid-template-columns: repeat({statCols.length}, {statColWidth})">
         {#each statCols as k}
           <div class="py-1 text-center font-semibold">{statLabels[k] ?? k}</div>

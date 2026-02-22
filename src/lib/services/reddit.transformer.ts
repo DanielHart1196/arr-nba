@@ -7,30 +7,36 @@ export class RedditTransformer {
     type: 'live' | 'post',
     eventDate?: string,
     awayCandidates: string[] = [],
-    homeCandidates: string[] = []
+    homeCandidates: string[] = [],
+    windowOverride?: { live?: [number, number]; post?: [number, number] }
   ): { post?: RedditPost } {
     const items = json?.data?.children ?? [];
     const now = Date.now() / 1000;
     
-    // Stricter freshness:
-    // For LIVE threads, must be within last 24 hours.
-    // For POST threads, must be within last 36 hours.
-    const maxAge = type === 'post' ? 36 * 3600 : 24 * 3600;
     const targetTs = eventDate ? Math.floor(new Date(eventDate).getTime() / 1000) : NaN;
     const useHistoricRanking = Number.isFinite(targetTs);
+    const isDateOnly =
+      Boolean(eventDate) &&
+      (() => {
+        const d = new Date(eventDate as string);
+        return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+      })();
+    const liveWindow = windowOverride?.live ?? (isDateOnly ? [-12 * 3600, 12 * 3600] : [-2 * 3600, 1 * 3600]);
+    const postWindow = windowOverride?.post ?? (isDateOnly ? [0 * 3600, 24 * 3600] : [2 * 3600, 5 * 3600]);
     const inWindow = (createdUtc: number): boolean => {
       if (!useHistoricRanking) {
         // If we do not have game date context, do not hard-expire PGT candidates.
         if (type === 'post') return true;
-        return (now - createdUtc) <= maxAge;
+        // Live threads should still be recent.
+        return (now - createdUtc) <= 24 * 3600;
       }
       const target = targetTs as number;
       if (type === 'live') {
-        // Game threads are often posted hours before tipoff.
-        return createdUtc >= target - (12 * 3600) && createdUtc <= target + (18 * 3600);
+        // Live threads: 2 hours before tipoff to 1 hour after.
+        return createdUtc >= target + liveWindow[0] && createdUtc <= target + liveWindow[1];
       }
-      // For PGT, rely on search relevance + title matching instead of hard time window.
-      return true;
+      // Post-game threads: 2-5 hours after tipoff.
+      return createdUtc >= target + postWindow[0] && createdUtc <= target + postWindow[1];
     };
     const fresh = items.filter((i: any) => inWindow(i?.data?.created_utc ?? 0));
 
@@ -79,6 +85,10 @@ export class RedditTransformer {
 
     // For historical lookup, choose the closest thread date to the game date.
     // Otherwise pick the latest fresh thread.
+    if (useHistoricRanking && filtered.length === 0) {
+      return { post: undefined };
+    }
+
     const sorted = filtered.sort((a: any, b: any) => {
       const aTs = a?.data?.created_utc ?? 0;
       const bTs = b?.data?.created_utc ?? 0;
@@ -187,6 +197,10 @@ export class RedditTransformer {
       const node: RedditComment = {
         id: d?.id,
         author: d?.author,
+        author_flair_text: d?.author_flair_text ?? '',
+        author_flair_text_color: d?.author_flair_text_color ?? undefined,
+        author_flair_background_color: d?.author_flair_background_color ?? undefined,
+        author_flair_richtext: Array.isArray(d?.author_flair_richtext) ? d.author_flair_richtext : undefined,
         score: d?.score ?? 0,
         body: d?.body ?? '',
         created_utc: d?.created_utc ?? 0
