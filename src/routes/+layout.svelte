@@ -11,6 +11,7 @@
   let appHydrated = false;
   let resumeWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let removeNativeBackListener: (() => void) | null = null;
+  let lastError: string | null = null;
 
   function clearResumeWatchdog(): void {
     if (!resumeWatchdogTimer) return;
@@ -68,6 +69,15 @@
   }
 
   onMount(() => {
+    const onError = (event: ErrorEvent) => {
+      const msg = event?.error?.stack || event?.message || 'Unknown error';
+      lastError = String(msg);
+    };
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const reason = (event as any)?.reason;
+      const msg = reason?.stack || reason?.message || reason || 'Unhandled promise rejection';
+      lastError = String(msg);
+    };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         markHydratedSoon();
@@ -87,6 +97,8 @@
     markHydratedSoon();
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandled);
 
     if (!dev && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/service-worker.js', { type: 'module' }).catch((error) => {
@@ -115,6 +127,8 @@
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandled);
       clearResumeWatchdog();
       if (removeNativeBackListener) {
         removeNativeBackListener();
@@ -134,6 +148,15 @@
 
 <div class="min-h-screen bg-black text-white overflow-x-hidden" data-arrnba-shell data-arrnba-hydrated={appHydrated ? '1' : '0'}>
   <slot />
+  {#if lastError}
+    <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4">
+      <div class="max-w-md w-full rounded border border-red-500/40 bg-black/90 p-4 text-sm text-red-200">
+        <div class="mb-2 font-semibold text-red-100">Runtime Error</div>
+        <pre class="whitespace-pre-wrap break-words text-xs">{lastError}</pre>
+        <button class="mt-3 rounded border border-white/15 px-2 py-1 text-xs text-white/80" on:click={() => (lastError = null)}>Dismiss</button>
+      </div>
+    </div>
+  {/if}
   <StreamOverlay
     title={$streamOverlayStore.title}
     streamUrl={$streamOverlayStore.streamUrl}

@@ -3,9 +3,10 @@
   import BoxScoreToggle from '../../../lib/components/BoxScoreToggle.svelte';
   import RedditFeedClient from '../../../lib/components/RedditFeedClient.svelte';
   import StreamOverlay from '../../../lib/components/StreamOverlay.svelte';
+  import SeasonStatsModal from '../../../lib/components/stats/SeasonStatsModal.svelte';
   import { nbaService } from '../../../lib/services/nba.service';
   import { streamOverlayStore } from '../../../lib/stores/streamOverlay.store';
-  import { toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
+  import { addDays, toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
   import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr, getTeamLogoScaleStyle, getTeamLogoScaleStyleByAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
@@ -36,22 +37,42 @@
   let lastUpdatedTick = Date.now();
   let lastGameId: string | null = null;
   let lastUpdatedSeconds: number | null = null;
+  const SEASON_CACHE_KEY = 'arrnba:season-leaders-cache';
+  const SEASON_CACHE_TTL_MS = 10 * 60 * 1000;
   
   // --- START OF NEW CODE ---
   let dynamicStreams: StreamSource[] = [];
   let streamsLoading = false;
-  let streamWindowUrl = `/stream/${data.id}`;
   const placeholderStreams = [STREAM_FALLBACK];
 
   async function findGameStream() {
-    // 1. Safety check: make sure we have game data first
-    if (!payload?.linescores?.away?.team?.displayName || !payload?.linescores?.home?.team?.displayName) return;
-    
+    if (streamsLoading) return;
     streamsLoading = true;
 
     try {
-      const away = payload.linescores.away.team.displayName;
-      const home = payload.linescores.home.team.displayName;
+      let away = payload?.linescores?.away?.team?.displayName || '';
+      let home = payload?.linescores?.home?.team?.displayName || '';
+
+      if (!away || !home) {
+        const baseDate = payload?.eventDate ? new Date(payload.eventDate) : new Date();
+        const dateCandidates = [baseDate, addDays(baseDate, -1), addDays(baseDate, 1)];
+        for (const d of dateCandidates) {
+          const key = toScoreboardDateKey(d);
+          const board = await nbaService.getScoreboard(key, false);
+          const event = (board?.events ?? []).find((e) => String(e.id) === String(data.id));
+          const comp = event?.competitions?.[0];
+          const competitors = comp?.competitors ?? [];
+          const awayTeam = competitors.find((c) => c.homeAway === 'away')?.team?.displayName;
+          const homeTeam = competitors.find((c) => c.homeAway === 'home')?.team?.displayName;
+          if (awayTeam && homeTeam) {
+            away = awayTeam;
+            home = homeTeam;
+            break;
+          }
+        }
+      }
+
+      if (!away || !home) return;
       const resolved = await findSharkStreamByTeams(away, home);
       if (resolved) dynamicStreams = [resolved];
     } catch (e) {
@@ -61,49 +82,33 @@
     }
   }
 
-  function buildStreamWindowUrl(sourceOverride?: StreamSource | null): string {
-    const source = sourceOverride ?? dynamicStreams[0] ?? placeholderStreams[0];
-    const basePath = `/stream/${data.id}`;
-    if (typeof window === 'undefined') return basePath;
-    const next = new URL(basePath, window.location.origin);
-    if (source?.url) next.searchParams.set('url', source.url);
-    if (source?.mode) next.searchParams.set('mode', source.mode);
-    return `${next.pathname}${next.search}`;
-  }
-
-  // 6. Tell Svelte to run this search automatically when the game loads
   $: if (payload?.linescores && dynamicStreams.length === 0 && !streamsLoading) {
     findGameStream();
   }
-  $: streamWindowUrl = buildStreamWindowUrl();
 
-  function openGlobalStream(): void {
+  async function ensureGameStream(): Promise<void> {
+    if (dynamicStreams.length > 0 || streamsLoading) return;
+    if (!payload?.linescores?.away?.team?.displayName || !payload?.linescores?.home?.team?.displayName) {
+      await refresh();
+    }
+    await findGameStream();
+  }
+
+  async function openGlobalStream(): Promise<void> {
+    await ensureGameStream();
     const sources = dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams;
     streamOverlayStore.open({
       contextId: data.id,
       title: streamsLoading ? 'Searching...' : 'Live Stream',
       sources,
       storageKey: 'arrnba.streamOverlay.global',
-      closedButtonLabel: 'Open Stream',
-      secondaryExternalUrl: streamWindowUrl,
-      secondaryExternalLabel: 'Open Stream Window'
+      closedButtonLabel: 'Open Stream'
     });
   }
 
-  async function openStreamWindow(): Promise<void> {
-    if (typeof window === 'undefined') return;
-    if (dynamicStreams.length === 0 && !streamsLoading) {
-      await findGameStream();
-    }
-    const nextUrl = buildStreamWindowUrl(dynamicStreams[0] ?? placeholderStreams[0]);
-    const absolute = new URL(nextUrl, window.location.origin).toString();
-    window.open(absolute, '_blank', 'noopener,noreferrer');
-  }
 
   $: streamOverlayStore.updateIfActive(data.id, {
-    title: streamsLoading ? 'Searching...' : 'Live Stream',
-    secondaryExternalUrl: streamWindowUrl,
-    secondaryExternalLabel: 'Open Stream Window'
+    title: streamsLoading ? 'Searching...' : 'Live Stream'
   });
   // --- END OF NEW CODE ---
 
@@ -162,7 +167,7 @@
   
   async function refresh() {
     try {
-      const response = await nbaService.getBoxscore(data.id);
+      const response = await nbaService.getBoxscore(data.id, true);
       payload = { ...response };
       lastUpdatedAt = Date.now();
     } catch (error) {
@@ -450,6 +455,7 @@
       lastUpdatedTick = Date.now();
     }, 1000);
 
+    prewarmSeasonLeaders();
     return () => {
       if (tickInterval) clearInterval(tickInterval);
     };
@@ -482,6 +488,30 @@
     const date = new Date(dateStr);
     if (Number.isNaN(date.getTime())) return '';
     return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  async function prewarmSeasonLeaders(): Promise<void> {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(SEASON_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.ts && Date.now() - Number(parsed.ts) < SEASON_CACHE_TTL_MS) {
+          return;
+        }
+      }
+    } catch {
+      // ignore cache parse errors
+    }
+
+    try {
+      const res = await fetch('/api/season-leaders');
+      if (!res.ok) return;
+      const json = await res.json();
+      localStorage.setItem(SEASON_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: json }));
+    } catch {
+      // ignore prewarm failures
+    }
   }
 
   $: if (payload?.linescores?.away?.team?.displayName && payload?.linescores?.home?.team?.displayName) {
@@ -538,17 +568,11 @@
       <div class="fixed bottom-3 right-3 z-50 flex items-center gap-2">
         <button
           type="button"
-          class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
-          on:click={openStreamWindow}
-        >
-          Open Stream Window
-        </button>
-        <button
-          type="button"
-          class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+          class="rounded border border-white/20 bg-black/90 px-3 py-1.5 text-xs text-white/80 hover:text-white disabled:opacity-60"
+          disabled={streamsLoading}
           on:click={openGlobalStream}
         >
-          Open Stream
+          {streamsLoading ? 'Resolving...' : 'Open Stream'}
         </button>
       </div>
     {/if}
@@ -665,3 +689,5 @@
     </div>
   {/if}
 </div>
+
+<SeasonStatsModal />

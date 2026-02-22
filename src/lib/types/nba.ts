@@ -50,6 +50,10 @@ export interface Player {
   name: string;
   stats: Record<string, number | string>;
   dnp?: boolean;
+  id?: string;
+  jersey?: string;
+  position?: string;
+  headshot?: string;
 }
 
 export interface PlayByPlayEntry {

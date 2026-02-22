@@ -62,3 +62,29 @@ export async function findSharkStreamByTeams(
     return null;
   }
 }
+
+export async function resolveHlsFromPlayerUrl(playerUrl: string): Promise<string | null> {
+  if (!playerUrl) return null;
+  if (typeof DOMParser === 'undefined') return null;
+  try {
+    const proxy = 'https://api.allorigins.win/get?url=';
+    const target = encodeURIComponent(playerUrl);
+    const res = await fetch(`${proxy}${target}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const html = typeof json?.contents === 'string' ? json.contents : '';
+    if (!html) return null;
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const scripts = Array.from(doc.querySelectorAll('script')).map((s) => s.textContent || '').join('\n');
+    const combined = `${html}\n${scripts}`;
+    const match = combined.match(/https?:\/\/[^"'\\s]+\\.m3u8[^"'\\s]*/i);
+    if (match?.[0]) return match[0];
+    const altMatch = combined.match(/\/\/[^"'\s]+\.m3u8[^"'\s]*/i);
+    if (altMatch?.[0]) return `https:${altMatch[0]}`;
+    return null;
+  } catch {
+    return null;
+  }
+}

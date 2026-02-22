@@ -14,6 +14,12 @@
   let error = '';
   let videoEl: HTMLVideoElement | null = null;
   let hls: Hls | null = null;
+  let isDirectStream = false;
+  let stallWatchdog: ReturnType<typeof setInterval> | null = null;
+  let lastKnownTime = 0;
+  let stalledTicks = 0;
+  let recoverAttempts = 0;
+  let lastRecoverAt = 0;
 
   function inferMode(url: string, preferredMode?: string | null): 'video' | 'embed' | 'external' {
     if (preferredMode === 'video' || preferredMode === 'embed' || preferredMode === 'external') return preferredMode;
@@ -30,6 +36,7 @@
     if (urlFromQuery) {
       streamUrl = urlFromQuery;
       streamMode = inferMode(urlFromQuery, modeFromQuery);
+      isDirectStream = urlFromQuery.includes('chunks.m3u8');
       return;
     }
 
@@ -58,6 +65,14 @@
       hls.destroy();
       hls = null;
     }
+    if (stallWatchdog) {
+      clearInterval(stallWatchdog);
+      stallWatchdog = null;
+    }
+    lastKnownTime = 0;
+    stalledTicks = 0;
+    recoverAttempts = 0;
+    lastRecoverAt = 0;
   }
 
   function attachVideo(): void {
@@ -77,9 +92,70 @@
     }
 
     if (!Hls.isSupported()) return;
-    hls = new Hls({ enableWorker: true });
+    const config = isDirectStream
+      ? {
+          enableWorker: true,
+          lowLatencyMode: true,
+          maxBufferLength: 8,
+          maxBufferSize: 8 * 1000 * 1000,
+          liveSyncDurationCount: 1,
+          liveMaxLatencyDurationCount: 3,
+          maxLiveSyncPlaybackRate: 1.5,
+          backBufferLength: 0
+        }
+      : { enableWorker: true };
+    hls = new Hls(config);
+    if (isDirectStream) {
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data?.fatal) return;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          hls?.startLoad();
+          return;
+        }
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          hls?.recoverMediaError();
+          return;
+        }
+        detachHls();
+      });
+    }
     hls.loadSource(streamUrl);
     hls.attachMedia(videoEl);
+
+    if (isDirectStream) {
+      if (stallWatchdog) clearInterval(stallWatchdog);
+      stalledTicks = 0;
+      lastKnownTime = videoEl.currentTime || 0;
+      stallWatchdog = setInterval(() => {
+        if (!videoEl || videoEl.paused || !hls) return;
+        const t = videoEl.currentTime || 0;
+        if (t > lastKnownTime + 0.01) {
+          lastKnownTime = t;
+          stalledTicks = 0;
+          return;
+        }
+        stalledTicks += 1;
+        if (stalledTicks < 3) return;
+        stalledTicks = 0;
+        try {
+          const now = Date.now();
+          if (now - lastRecoverAt > 15_000) {
+            recoverAttempts = 0;
+          }
+          lastRecoverAt = now;
+          recoverAttempts += 1;
+
+          if (recoverAttempts <= 2) {
+            hls.startLoad();
+            void videoEl.play().catch(() => {});
+          } else {
+            // Hard reload after repeated stalls.
+            detachHls();
+            attachVideo();
+          }
+        } catch {}
+      }, 3000);
+    }
   }
 
   function openExternal(url: string): void {

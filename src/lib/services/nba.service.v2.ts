@@ -8,6 +8,7 @@ import type { INBADataSource, INBATransformer } from './interfaces';
 export class NBAService {
   private readonly browserScoreboardFreshMs = 6 * 60 * 60 * 1000; // 6 hours
   private readonly browserRefreshCooldownMs = 60 * 1000; // 1 minute
+  private readonly browserBoxscoreFreshMs = 5 * 60 * 1000; // 5 minutes
   private readonly refreshTracker = new Map<string, number>();
 
   constructor(
@@ -22,6 +23,10 @@ export class NBAService {
 
   private scoreboardStorageKey(date?: string): string {
     return `arrnba:scoreboard:${date ?? 'today'}`;
+  }
+
+  private boxscoreStorageKey(eventId: string): string {
+    return `arrnba:boxscore:${eventId}`;
   }
 
   private hashPayload(payload: ScoreboardResponse): string {
@@ -46,6 +51,19 @@ export class NBAService {
     }
   }
 
+  private readBrowserBoxscore(eventId: string): { ts: number; data: BoxscoreResponse } | null {
+    if (!this.isBrowser()) return null;
+    try {
+      const raw = localStorage.getItem(this.boxscoreStorageKey(eventId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { ts: number; data: BoxscoreResponse };
+      if (!parsed || typeof parsed.ts !== 'number' || !parsed.data) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
   private writeBrowserScoreboard(date: string | undefined, data: ScoreboardResponse, hash?: string): void {
     if (!this.isBrowser()) return;
     try {
@@ -55,6 +73,17 @@ export class NBAService {
         data
       };
       localStorage.setItem(this.scoreboardStorageKey(date), JSON.stringify(payload));
+    } catch {}
+  }
+
+  private writeBrowserBoxscore(eventId: string, data: BoxscoreResponse): void {
+    if (!this.isBrowser()) return;
+    try {
+      const payload = {
+        ts: Date.now(),
+        data
+      };
+      localStorage.setItem(this.boxscoreStorageKey(eventId), JSON.stringify(payload));
     } catch {}
   }
 
@@ -155,29 +184,46 @@ export class NBAService {
   getCachedBoxscore(eventId: string): BoxscoreResponse | null {
     const cacheKey = `boxscore:${eventId}`;
     const cached = this.cache.get<BoxscoreResponse>(cacheKey);
-    if (!cached || cached instanceof Promise) return null;
-    return cached;
+    if (cached && !(cached instanceof Promise)) return cached;
+
+    const browserCached = this.readBrowserBoxscore(eventId);
+    if (browserCached?.data) {
+      const isFresh = Date.now() - browserCached.ts < this.browserBoxscoreFreshMs;
+      if (!isFresh) {
+        // Still return stale data immediately; caller will refresh ASAP.
+        // Keep stale data available for instant UI.
+      }
+      this.cache.set(cacheKey, browserCached.data, 15 * 1000);
+      return browserCached.data;
+    }
+    return null;
   }
 
-  async getBoxscore(eventId: string): Promise<BoxscoreResponse> {
+  async getBoxscore(eventId: string, forceRefresh: boolean = false): Promise<BoxscoreResponse> {
     const cacheKey = `boxscore:${eventId}`;
-    return this.cache.getOrFetch(
-      cacheKey,
-      async () => {
-        const [summary, scoreboard] = await Promise.all([
-          this.dataSource.getSummary(eventId),
-          this.getScoreboard()
-        ]);
-        const eventFromScoreboard = scoreboard.events.find((e) => String(e.id) === String(eventId));
-        const summaryCompetition = summary?.header?.competitions?.[0];
-        const eventFromSummary = summaryCompetition
-          ? { id: String(eventId), competitions: [summaryCompetition] }
-          : undefined;
-        const event = eventFromScoreboard ?? eventFromSummary;
-        return this.transformer.transformBoxscore(summary, event);
-      },
-      15 * 1000 // 15 seconds TTL
-    );
+    const fetcher = async () => {
+      const [summary, scoreboard] = await Promise.all([
+        this.dataSource.getSummary(eventId, forceRefresh),
+        this.getScoreboard(undefined, forceRefresh)
+      ]);
+      const eventFromScoreboard = scoreboard.events.find((e) => String(e.id) === String(eventId));
+      const summaryCompetition = summary?.header?.competitions?.[0];
+      const eventFromSummary = summaryCompetition
+        ? { id: String(eventId), competitions: [summaryCompetition] }
+        : undefined;
+      const event = eventFromScoreboard ?? eventFromSummary;
+      const payload = this.transformer.transformBoxscore(summary, event);
+      this.writeBrowserBoxscore(eventId, payload);
+      return payload;
+    };
+
+    if (forceRefresh) {
+      const payload = await fetcher();
+      this.cache.set(cacheKey, payload, 15 * 1000);
+      return payload;
+    }
+
+    return this.cache.getOrFetch(cacheKey, fetcher, 15 * 1000);
   }
 
   async prewarmBoxscores(eventIds: string[]): Promise<void> {

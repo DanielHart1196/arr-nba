@@ -49,16 +49,26 @@ export class ESPNDataSource implements INBADataSource {
     return res.json();
   }
 
-  async getSummary(eventId: string): Promise<any> {
+  async getSummary(eventId: string, forceRefresh: boolean = false): Promise<any> {
     if (this.isBrowser()) {
-      const res = await fetch(`/api/boxscore/${encodeURIComponent(eventId)}`);
+      const search = new URLSearchParams();
+      if (forceRefresh) {
+        search.set('forceRefresh', '1');
+        search.set('_ts', String(Date.now()));
+      }
+      const qs = search.toString();
+      const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
+      const res = await fetch(`/api/boxscore/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ''}`, fetchOpts);
       if (!res.ok) throw new Error(`Boxscore API error: ${res.status}`);
       const payload = await res.json();
       if (payload?.error) throw new Error(String(payload.error));
       return payload;
     }
 
-    const res = await fetch(`https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, { cache: 'no-store' });
+    const res = await fetch(
+      `https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`,
+      forceRefresh ? { cache: 'no-store' } : undefined
+    );
     if (!res.ok) throw new Error(`ESPN Summary error: ${res.status}`);
     return res.json();
   }

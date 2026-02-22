@@ -35,8 +35,8 @@ export class NBAService {
     return this.nbaService.getScoreboard(date, forceRefresh);
   }
 
-  async getBoxscore(eventId: string): Promise<BoxscoreResponse> {
-    return this.nbaService.getBoxscore(eventId);
+  async getBoxscore(eventId: string, forceRefresh: boolean = false): Promise<BoxscoreResponse> {
+    return this.nbaService.getBoxscore(eventId, forceRefresh);
   }
 
   async getStandings(forceRefresh: boolean = false): Promise<any> {

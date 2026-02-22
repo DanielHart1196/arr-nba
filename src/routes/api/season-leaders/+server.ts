@@ -63,7 +63,8 @@ function buildDashParams(url: URL, season: string, measureType: 'Base' | 'Advanc
 
 export const GET = async ({ url }: any) => {
   const season = url.searchParams.get('season') || seasonFromDate();
-  const cacheKey = `season-stats:v2:${season}`;
+  const perMode = url.searchParams.get('perMode') || 'PerGame';
+  const cacheKey = `season-stats:v2:${season}:${perMode}`;
 
   try {
     const data = await apiCache.getOrFetch(
@@ -72,10 +73,12 @@ export const GET = async ({ url }: any) => {
         const headers = buildHeaders();
         const playerUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
         buildDashParams(playerUrl, season, 'Base');
+        playerUrl.searchParams.set('PerMode', perMode);
         playerUrl.searchParams.set('StarterBench', '');
 
         const teamUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
         buildDashParams(teamUrl, season, 'Base');
+        teamUrl.searchParams.set('PerMode', perMode);
 
         const [playerRes, teamRes] = await Promise.all([
           fetch(playerUrl.toString(), { headers }),

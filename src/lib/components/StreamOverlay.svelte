@@ -840,7 +840,7 @@
 
   function tryOpenInFirefox(url: string): void {
     if (typeof navigator === 'undefined') {
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.location.href = url;
       return;
     }
     const ua = navigator.userAgent || '';
@@ -857,7 +857,7 @@
           `S.browser_fallback_url=${encodeURIComponent(url)};end`;
         window.location.href = intentUrl;
       } catch {
-        window.open(url, '_blank', 'noopener,noreferrer');
+        window.location.href = url;
       }
       return;
     }
@@ -867,13 +867,13 @@
       window.location.href = firefoxUrl;
       setTimeout(() => {
         if (typeof document === 'undefined' || !document.hidden) {
-          window.open(url, '_blank', 'noopener,noreferrer');
+          window.location.href = url;
         }
       }, 500);
       return;
     }
 
-    window.open(url, '_blank', 'noopener,noreferrer');
+    window.location.href = url;
   }
 
   function resolveExternalUrl(url: string): string {

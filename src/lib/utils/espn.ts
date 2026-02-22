@@ -2,6 +2,10 @@ export type PlayerStatRow = {
   name: string;
   dnp?: boolean;
   stats: Record<string, number | string>;
+  id?: string;
+  jersey?: string;
+  position?: string;
+  headshot?: string;
 };
 
 export function parseMakesAttempts(input: string) {
@@ -23,6 +27,14 @@ function minutesToSeconds(v: any): number {
   }
   const n = Number(v);
   return isNaN(n) ? 0 : n;
+}
+
+function resolveHeadshot(raw: any): string | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === 'string') return raw;
+  if (typeof raw?.href === 'string') return raw.href;
+  if (typeof raw?.url === 'string') return raw.url;
+  return undefined;
 }
 
 export function normalizePlayers(summary: any, scoreboardEvent?: any) {
@@ -84,7 +96,21 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
       }
       const minVal = statObj['MIN'];
       const dnpFlag = p?.didNotPlay === true || (typeof minVal === 'string' && minVal.toUpperCase() === 'DNP');
-      rows.push({ name: displayName, dnp: dnpFlag, stats: statObj });
+      const athleteId = p?.athlete?.id ? String(p.athlete.id) : undefined;
+      const jersey = p?.athlete?.jersey ? String(p.athlete.jersey) : undefined;
+      const position = p?.athlete?.position?.abbreviation || p?.athlete?.position?.name;
+      const headshot =
+        resolveHeadshot(p?.athlete?.headshot) ||
+        (athleteId ? `https://a.espncdn.com/i/headshots/nba/players/full/${athleteId}.png` : undefined);
+      rows.push({
+        name: displayName,
+        dnp: dnpFlag,
+        stats: statObj,
+        id: athleteId,
+        jersey,
+        position: position ? String(position) : undefined,
+        headshot
+      });
     }
     
     rows.sort((a, b) => {

@@ -714,7 +714,7 @@
             class="w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
             on:click={openLeaders}
           >
-            Season Leaders
+            Stats
           </button>
         </div>
       {/if}
