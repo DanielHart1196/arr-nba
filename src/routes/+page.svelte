@@ -432,16 +432,6 @@
     menuOpen = false;
   }
 
-  function openStandings() {
-    closeMenu();
-    goto('/standings');
-  }
-
-  function openLeaders() {
-    closeMenu();
-    goto('/leaders');
-  }
-
   function handleDatePicked(value: string) {
     const picked = parseLocalDateKey(value);
     if (!picked) return;
@@ -700,22 +690,22 @@
       </button>
       {#if menuOpen}
         <div class="absolute left-0 top-11 z-20 w-44 rounded border border-white/15 bg-[#121212] shadow-lg" data-no-swipe="true">
-          <button
+          <a
             data-no-swipe="true"
-            type="button"
-            class="w-full px-3 py-2 text-left text-sm hover:bg-white/10"
-            on:click={openStandings}
+            href="/standings"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
+            on:click={closeMenu}
           >
             Standings
-          </button>
-          <button
+          </a>
+          <a
             data-no-swipe="true"
-            type="button"
-            class="w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
-            on:click={openLeaders}
+            href="/stats"
+            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+            on:click={closeMenu}
           >
             Stats
-          </button>
+          </a>
         </div>
       {/if}
     </div>
