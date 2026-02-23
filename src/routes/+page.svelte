@@ -481,7 +481,17 @@
   function navigateFromMenu(path: string) {
     closeMenu();
     requestAnimationFrame(() => {
-      goto(path);
+      const target = new URL(path, window.location.origin);
+      goto(path).catch(() => {
+        window.location.href = target.toString();
+      });
+      setTimeout(() => {
+        const current = window.location.pathname + window.location.search + window.location.hash;
+        const desired = target.pathname + target.search + target.hash;
+        if (current !== desired) {
+          window.location.href = target.toString();
+        }
+      }, 350);
     });
   }
 
