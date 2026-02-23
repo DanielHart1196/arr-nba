@@ -79,6 +79,7 @@ function buildDashParams(url: URL, season: string, measureType: 'Base' | 'Advanc
 export const GET = async ({ url }: any) => {
   const season = url.searchParams.get('season') || seasonFromDate();
   const perMode = url.searchParams.get('perMode') || 'PerGame';
+  const debug = url.searchParams.get('debug') === '1';
   const cacheKey = `season-stats:v2:${season}:${perMode}`;
 
   try {
@@ -95,13 +96,39 @@ export const GET = async ({ url }: any) => {
         buildDashParams(teamUrl, season, 'Base');
         teamUrl.searchParams.set('PerMode', perMode);
 
+        const startedAt = Date.now();
         const [playerRes, teamRes] = await Promise.all([
           fetch(playerUrl.toString(), { headers }),
           fetch(teamUrl.toString(), { headers })
         ]);
+        const durationMs = Date.now() - startedAt;
 
-        if (!playerRes.ok) throw new Error(`NBA player stats error: ${playerRes.status}`);
-        if (!teamRes.ok) throw new Error(`NBA team stats error: ${teamRes.status}`);
+        if (!playerRes.ok) {
+          const body = await playerRes.text().catch(() => '');
+          const error = new Error(`NBA player stats error: ${playerRes.status}`);
+          (error as any).diagnostics = {
+            durationMs,
+            playerStatus: playerRes.status,
+            playerStatusText: playerRes.statusText,
+            playerCfRay: playerRes.headers.get('cf-ray'),
+            playerServer: playerRes.headers.get('server'),
+            playerBodySample: body.slice(0, 400)
+          };
+          throw error;
+        }
+        if (!teamRes.ok) {
+          const body = await teamRes.text().catch(() => '');
+          const error = new Error(`NBA team stats error: ${teamRes.status}`);
+          (error as any).diagnostics = {
+            durationMs,
+            teamStatus: teamRes.status,
+            teamStatusText: teamRes.statusText,
+            teamCfRay: teamRes.headers.get('cf-ray'),
+            teamServer: teamRes.headers.get('server'),
+            teamBodySample: body.slice(0, 400)
+          };
+          throw error;
+        }
 
         const [playerJson, teamJson] = await Promise.all([playerRes.json(), teamRes.json()]);
         const players = mapResult(playerJson);
@@ -120,6 +147,14 @@ export const GET = async ({ url }: any) => {
 
     return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e: any) {
+    if (debug) {
+      console.error('[season-leaders][debug]', {
+        season,
+        perMode,
+        error: e?.message,
+        diagnostics: e?.diagnostics ?? null
+      });
+    }
     const lastGood = lastGoodByKey.get(cacheKey);
     if (lastGood && Date.now() - lastGood.ts <= LAST_GOOD_MAX_AGE_MS) {
       const stalePayload: SeasonLeadersPayload = {
@@ -133,7 +168,15 @@ export const GET = async ({ url }: any) => {
       });
     }
 
-    return new Response(JSON.stringify({ error: e?.message ?? 'unknown' }), {
+    const debugPayload = debug
+      ? {
+          error: e?.message ?? 'unknown',
+          diagnostics: e?.diagnostics ?? null,
+          season,
+          perMode
+        }
+      : { error: e?.message ?? 'unknown' };
+    return new Response(JSON.stringify(debugPayload), {
       status: 500,
       headers: { 'content-type': 'application/json' }
     });

@@ -587,7 +587,7 @@
           <table class="w-full text-xs bg-black">
             <thead class="bg-[#0d0d0d] text-white/70 sticky top-0 z-20">
               <tr>
-                <th class="px-1.5 py-2 text-center sticky left-0 bg-[#0d0d0d] z-30 w-[1.75rem] text-white/70">#</th>
+                <th class="px-1 py-2 text-center sticky left-0 bg-[#0d0d0d] z-40 w-[1.5rem] text-white/70">#</th>
                 <th
                   class="pl-2 pr-0 py-2 text-left whitespace-nowrap hover:text-white sticky left-[1.75rem] z-30 bg-[#0d0d0d] {sortKey === 'PLAYER_NAME' ? 'text-white' : ''}"
                   on:click={togglePlayerSearch}
@@ -633,10 +633,10 @@
             <tbody>
               {#each playerRows as row, i}
                 <tr class="border-t border-white/10">
-                  <td class="px-1.5 py-2 text-center whitespace-nowrap sticky left-0 bg-black z-20 w-[1.75rem] text-white/70">
+                  <td class="px-1 py-2 text-center whitespace-nowrap sticky left-0 bg-black z-40 w-[1.5rem] text-white/70">
                     {i + 1}
                   </td>
-                  <td class="pl-2 pr-0 py-2 whitespace-nowrap sticky left-[1.75rem] bg-black z-10">
+                  <td class="pl-2 pr-0 py-2 whitespace-nowrap sticky left-[1.5rem] bg-black z-30">
                     <button class="hover:text-white/90 truncate w-[13ch] max-w-[13ch] block text-left" on:click={() => openPlayerModal(row)}>
                       {formatName(playerName(row))}
                     </button>
