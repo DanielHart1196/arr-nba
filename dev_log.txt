@@ -1,0 +1,4 @@
+[DEBUG] Current Dir: /data/data/com.termux/files/home/arr-nba
+[DEBUG] Attempting to spawn new session...
+Starting service: Intent { act=com.termux.service_execute cmp=com.termux/.app.TermuxService (has extras) }
+[DEBUG] Exit Code: 0

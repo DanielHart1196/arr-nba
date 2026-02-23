@@ -5,6 +5,7 @@
 
   export let comment: RedditComment;
   export let depth = 0;
+  export let showFlairImages = true;
 
   const dispatch = createEventDispatcher<{ toggle: { id: string } }>();
 
@@ -178,13 +179,13 @@
 >
   <div class="text-sm text-white/70">
     {comment.author}
-    {#if flairParts.some((part) => part.type === 'emoji' && part.url)}
+    {#if showFlairImages && flairParts.some((part) => part.type === 'emoji' && part.url)}
       <span
         class={`ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded ${hasCustomFlairStyle() ? '' : 'text-white/50 bg-white/10'}`}
         style={flairStyle()}
       >
         {#each flairParts as part, i (`${part.type}-${i}`)}
-          {#if part.type === 'emoji' && part.url}
+          {#if showFlairImages && part.type === 'emoji' && part.url}
             <img src={part.url} alt={part.text || 'flair'} class="h-3 w-3 object-contain" loading="lazy" decoding="async" />
           {/if}
         {/each}
@@ -252,7 +253,7 @@
     {#if comment.replies && comment.replies.length}
       <div class="mt-2 pl-3 border-l border-white/10 space-y-2">
         {#each comment.replies as reply, i (reply.id || `${depth}-${i}`)}
-          <svelte:self comment={reply} depth={depth + 1} on:toggle />
+          <svelte:self comment={reply} depth={depth + 1} showFlairImages={showFlairImages} on:toggle />
         {/each}
       </div>
     {/if}

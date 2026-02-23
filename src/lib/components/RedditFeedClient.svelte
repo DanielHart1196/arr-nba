@@ -71,6 +71,12 @@
   let lastTeamsKey = '';
   let lastAutoFetchKey = '';
   let showDebug = false;
+  let lastNoCommentsLogKey = '';
+  let lastThreadMissingLogKey = '';
+  let debugLogEntries: Array<{ at: string; level: 'info' | 'warn' | 'error'; message: string; details?: Record<string, any> }> = [];
+  let flairImagesReady = false;
+  let flairReadyTimeout: ReturnType<typeof setTimeout> | null = null;
+  let flairReadyIdleId: number | null = null;
   let lastEnsureKey = '';
   let ensureQueued = false;
   let ensureInFlight: Record<FeedMode, Record<ThreadSource, boolean>> = {
@@ -248,7 +254,64 @@
     return new Date(created * 1000).toISOString();
   }
 
-  function debugLog(_message: string): void {}
+  function debugLog(message: string, details?: Record<string, any>): void {
+    if (!showDebug) return;
+    if (details) {
+      console.log('[reddit][trace]', message, details);
+    } else {
+      console.log('[reddit][trace]', message);
+    }
+  }
+
+  function debugInfo(message: string, details: Record<string, any>): void {
+    pushInlineDebugLog('info', message, details);
+    console.log('[reddit][debug]', message, details);
+  }
+
+  function pushInlineDebugLog(level: 'info' | 'warn' | 'error', message: string, details?: Record<string, any>): void {
+    const entry = {
+      at: new Date().toLocaleTimeString(),
+      level,
+      message,
+      details
+    };
+    debugLogEntries = [entry, ...debugLogEntries].slice(0, 16);
+  }
+
+  function logThreadNotPopulated(targetMode: FeedMode, targetSource: ThreadSource, origin: string): void {
+    const key = `${targetMode}:${targetSource}:${origin}:${eventId || 'no-event'}:${awayName}|${homeName}:${eventDate ?? ''}`;
+    if (key === lastThreadMissingLogKey) return;
+    lastThreadMissingLogKey = key;
+    const details = {
+      mode: targetMode,
+      source: targetSource,
+      origin,
+      eventId,
+      away: awayName,
+      home: homeName,
+      eventDate
+    };
+    pushInlineDebugLog('warn', 'thread not populated', details);
+    console.warn('[reddit][missing-thread]', {
+      ...details
+    });
+  }
+
+  function isTruthyDebugFlag(value: string | null): boolean {
+    if (!value) return false;
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+
+  function resolveShowDebugFromClient(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (isTruthyDebugFlag(params.get('redditDebug')) || isTruthyDebugFlag(params.get('debug'))) return true;
+      if (isTruthyDebugFlag(localStorage.getItem('redditDebug')) || isTruthyDebugFlag(localStorage.getItem('debug'))) return true;
+    } catch {}
+    return false;
+  }
 
   $: currentMode = mode === 'LIVE' || mode === 'POST' ? mode : null;
   $: currentSource = currentMode ? selectedSourceByMode[currentMode] : 'reddit';
@@ -260,6 +323,20 @@
   $: awayLogoAbbr = resolveTeamLogoAbbr(awayName);
   $: homeLogoAbbr = resolveTeamLogoAbbr(homeName);
   $: threadWithinWindow = currentMode ? isThreadWithinWindow(thread, currentMode, eventDate) : false;
+  $: if (currentMode && !thread && !hasVisibleComments && !loading) {
+    const key = `${currentMode}:${currentSource}:${eventId || 'no-event'}:${awayName}|${homeName}`;
+    if (key !== lastNoCommentsLogKey) {
+      lastNoCommentsLogKey = key;
+      logThreadNotPopulated(currentMode, currentSource, 'ui');
+      debugInfo('no comments yet (ui)', {
+        mode: currentMode,
+        source: currentSource,
+        eventId,
+        away: awayName,
+        home: homeName
+      });
+    }
+  }
 
   $: {
     const nextViewKey = currentMode ? makeViewKey(currentMode, currentSource) : '';
@@ -308,6 +385,15 @@
       }
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
       debugLog(`commentsResult ${targetMode}/${targetSource} id=${post.id} count=${result.comments?.length ?? 0}`);
+      if ((result.comments?.length ?? 0) === 0) {
+        debugInfo('no comments yet', {
+          mode: targetMode,
+          source: targetSource,
+          postId: post.id,
+          permalink: post.permalink,
+          sort
+        });
+      }
       const nextComments = sortedCopy(result.comments ?? [], sortChoice);
       applyCollapsedMap(nextComments, collapsedByView[makeViewKey(targetMode, targetSource)] ?? {});
       cache[targetMode][targetSource].comments = nextComments;
@@ -459,6 +545,7 @@
         const eventCached = nbaService.getCachedThreadForEvent(eventId, targetMode === 'POST' ? 'post' : 'live');
         if (eventCached && (!eventDate || isThreadWithinWindow(eventCached, targetMode, eventDate))) {
           post = eventCached;
+          debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'eventCache', postId: post?.id, permalink: post?.permalink });
         }
       }
 
@@ -469,6 +556,8 @@
           post = (targetMode === 'POST' ? entry?.pgt : entry?.gdt) ?? null;
           if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
             post = null;
+          } else if (post) {
+            debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'index', postId: post?.id, permalink: post?.permalink });
           }
         } catch (error) {
           debugLog(`redditIndex failed ${(error as Error)?.message ?? 'unknown'}`);
@@ -508,8 +597,21 @@
           'redditSearch'
         );
         post = result?.post ?? null;
+        if (!post) {
+          logThreadNotPopulated(targetMode, targetSource, 'search');
+          debugInfo('no thread found', {
+            mode: targetMode,
+            source: 'reddit',
+            origin: 'search',
+            away: awayName,
+            home: homeName,
+            eventDate,
+            eventId
+          });
+        }
 
         if (post) {
+          debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'search', postId: post?.id, permalink: post?.permalink });
           cache[targetMode][targetSource].thread = post;
           writeStoredThread(targetMode, targetSource, post);
           cache = { ...cache };
@@ -529,6 +631,10 @@
       void prefetchTeamSources(targetMode);
     } catch (error) {
       console.error(`Error ensuring ${targetMode} r/nba thread:`, error);
+      pushInlineDebugLog('error', `ensureReddit error (${targetMode})`, {
+        source: targetSource,
+        error: (error as Error)?.message ?? 'unknown'
+      });
       triedFetch[targetMode][targetSource] = false;
       if (mode === targetMode) loading = false;
       debugLog(`ensureReddit error ${targetMode} ${(error as Error)?.message ?? 'unknown'}`);
@@ -665,10 +771,15 @@
       if (post) {
         await fetchCommentsFor(post, sort, targetMode, targetSource);
       } else {
+        logThreadNotPopulated(targetMode, targetSource, `subreddit:${subreddit}`);
         loading = false;
       }
     } catch (error: unknown) {
       console.error(`Failed to load r/${subreddit} thread:`, error);
+      pushInlineDebugLog('error', `team thread load failed (${targetMode}/${targetSource})`, {
+        subreddit,
+        error: (error as Error)?.message ?? 'unknown'
+      });
       errorMsg = error instanceof Error ? error.message : `Failed to load r/${subreddit} thread`;
       triedFetch[targetMode][targetSource] = false;
       loading = false;
@@ -815,11 +926,34 @@
 
   onMount(() => {
     restorePersistedUIState();
+    if (typeof window === 'undefined') return;
+    showDebug = resolveShowDebugFromClient();
+    if (showDebug) {
+      console.log('[reddit][debug] trace logging enabled', {
+        redditDebug: new URLSearchParams(window.location.search).get('redditDebug'),
+        debug: new URLSearchParams(window.location.search).get('debug')
+      });
+    }
+    if ('requestIdleCallback' in window) {
+      const idle = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
+      flairReadyIdleId = idle.requestIdleCallback?.(() => {
+        flairImagesReady = true;
+      }, { timeout: 1200 }) ?? null;
+    } else {
+      flairReadyTimeout = setTimeout(() => {
+        flairImagesReady = true;
+      }, 650);
+    }
   });
 
   onDestroy(() => {
     saveActiveViewScroll();
     persistUIState();
+    if (flairReadyTimeout) clearTimeout(flairReadyTimeout);
+    if (flairReadyIdleId !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+      (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(flairReadyIdleId);
+      flairReadyIdleId = null;
+    }
   });
 </script>
 
@@ -896,12 +1030,34 @@
       Loading comments...
     </div>
   {:else if !thread && !hasVisibleComments}
-    <div class="text-white/70">No comments yet.</div>
+    <div class="space-y-2">
+      <div class="text-white/70">No comments yet.</div>
+      <div class="rounded border border-yellow-500/30 bg-yellow-950/20 p-2 text-[11px] text-yellow-100/90">
+        <div class="font-semibold text-yellow-200/95 mb-1">Reddit Diagnostics</div>
+        <div class="text-yellow-50/80 mb-1">
+          mode={currentMode ?? '-'} source={currentSource} eventId={eventId ?? '-'}
+        </div>
+        {#if debugLogEntries.length > 0}
+          <div class="space-y-1">
+            {#each debugLogEntries as entry, idx (`${entry.at}:${entry.message}:${idx}`)}
+              <div class="border border-yellow-500/20 rounded px-2 py-1">
+                <div class="text-yellow-100/95">[{entry.at}] [{entry.level}] {entry.message}</div>
+                {#if entry.details}
+                  <pre class="whitespace-pre-wrap break-words text-[10px] text-yellow-50/80">{JSON.stringify(entry.details, null, 2)}</pre>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="text-yellow-50/70">No diagnostics captured yet.</div>
+        {/if}
+      </div>
+    </div>
   {:else}
     <div class="space-y-3">
       {#each comments as c, i (c.id || i)}
         <div class="w-full text-left border border-white/10 rounded p-2">
-          <RedditCommentNode comment={c} on:toggle={handleCommentToggle} />
+          <RedditCommentNode comment={c} showFlairImages={flairImagesReady} on:toggle={handleCommentToggle} />
         </div>
       {/each}
     </div>
