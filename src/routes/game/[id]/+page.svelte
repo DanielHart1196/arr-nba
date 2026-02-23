@@ -10,6 +10,8 @@
   import { addDays, toScoreboardDateKey } from '../../../lib/utils/scoreboard.utils';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
   import { getTeamLogoAbbr, getTeamLogoPath, getTeamLogoPathByAbbr } from '../../../lib/utils/team.utils';
+  import { getSeasonLeadersWithFallback } from '$lib/utils/season-leaders';
+  import { resolveApiUrl } from '$lib/utils/runtime';
   import TeamLogo from '../../../lib/components/TeamLogo.svelte';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
   import type { Event as NBAEvent } from '../../../lib/types/nba';
@@ -380,7 +382,7 @@
       let nextSources: StreamSource[] = [];
 
       for (const q of candidateQueries) {
-        const apiUrl = `/api/highlights/nba?query=${encodeURIComponent(q)}&limit=8`;
+        const apiUrl = resolveApiUrl(`/api/highlights/nba?query=${encodeURIComponent(q)}&limit=8`);
         const response = await fetch(apiUrl);
         if (!response.ok) {
           console.log('[highlights][client] non-ok response', { gameId: data.id, query: q, status: response.status, apiUrl });
@@ -538,9 +540,13 @@
     }
 
     try {
-      const res = await fetch('/api/season-leaders');
-      if (!res.ok) return;
-      const json = await res.json();
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth() + 1;
+      const startYear = m >= 10 ? y : y - 1;
+      const endYear = String(startYear + 1).slice(-2);
+      const season = `${startYear}-${endYear}`;
+      const json = await getSeasonLeadersWithFallback(season, 'PerGame');
       localStorage.setItem(SEASON_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: json }));
     } catch {
       // ignore prewarm failures

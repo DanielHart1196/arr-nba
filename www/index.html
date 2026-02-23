@@ -1,11 +1,51 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <link rel="icon" href="/favicon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>arr-nba</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <link href="/_app/immutable/entry/start.J8jj2rjE.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DQ4IhYeb.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/BeCv7CUC.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/BfThKmbO.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/CYgJF_JY.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/C2nG0MPs.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/8UtF8RsF.js" rel="modulepreload">
+		<link href="/_app/immutable/entry/app.CcvvaoAQ.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/Dp1pzeXC.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/3kyMSTtH.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DSkhooMa.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DQTj3_vJ.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DzksAZhY.js" rel="modulepreload">
+		
   </head>
-  <body style="background:#000;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-    <div>Capacitor shell ready. Configure web build or server.url.</div>
+  <body>
+    <div style="display: contents">
+			<script>
+				{
+					__sveltekit_1tnlou0 = {
+						base: ""
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("/_app/immutable/entry/start.J8jj2rjE.js"),
+						import("/_app/immutable/entry/app.CcvvaoAQ.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element);
+					});
+
+					if ('serviceWorker' in navigator) {
+						addEventListener('load', function () {
+							navigator.serviceWorker.register('/service-worker.js');
+						});
+					}
+				}
+			</script>
+		</div>
   </body>
 </html>

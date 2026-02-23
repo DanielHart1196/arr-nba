@@ -1,8 +1,9 @@
 import type { IRedditDataSource } from './interfaces';
 import type { RedditPost, RedditComment, RedditSearchRequest } from '$lib/types/nba';
+import { resolveApiUrl } from '$lib/utils/runtime';
 
 export class RedditDataSource implements IRedditDataSource {
-  private readonly BASE_URL = '/api/reddit';
+  private readonly BASE_URL = resolveApiUrl('/api/reddit');
   private readonly USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 (arr-nba app)';
   private readonly JSON_HEADERS = { 'Accept': 'application/json' };
   private readonly FETCH_TIMEOUT_MS = 8000;

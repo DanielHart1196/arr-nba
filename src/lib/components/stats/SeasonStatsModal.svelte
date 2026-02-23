@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { closeSeasonStatsModal, seasonStatsModal } from '../../stores/seasonStatsModal.store';
   import TeamLogo from '../TeamLogo.svelte';
+  import { buildHeadshotFallbacks } from '$lib/utils/headshots';
 
   let headshotSrc = '';
   let fallbackIndex = 0;
@@ -13,15 +14,7 @@
   }
 
   function headshotFallbacks(): string[] {
-    const id = $seasonStatsModal.playerId;
-    const list: string[] = [];
-    if ($seasonStatsModal.headshot) list.push($seasonStatsModal.headshot);
-    if (id) {
-      list.push(`https://a.espncdn.com/i/headshots/nba/players/full/${id}.png`);
-      list.push(`https://a.espncdn.com/i/headshots/nba/players/full/${id}.jpg`);
-      list.push(`https://cdn.nba.com/headshots/nba/latest/260x190/${id}.png`);
-    }
-    return Array.from(new Set(list.filter(Boolean)));
+    return buildHeadshotFallbacks($seasonStatsModal.playerId, $seasonStatsModal.headshot);
   }
 
   function advanceHeadshot(): void {

@@ -1,0 +1,1 @@
+import{R as o}from"../chunks/CYgJF_JY.js";import"../chunks/8UtF8RsF.js";function r(e,t){throw new o(e,t.toString())}const s=async({url:e})=>{const t=e.searchParams.toString();throw r(307,t?`/stats?${t}`:"/stats")},c=Object.freeze(Object.defineProperty({__proto__:null,load:s},Symbol.toStringTag,{value:"Module"}));export{c as universal};

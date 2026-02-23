@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { nbaService } from '$lib/services/nba.service';
   import TeamLogo from '$lib/components/TeamLogo.svelte';
   import { getTeamLogoAbbr, getTeamLogoPath } from '$lib/utils/team.utils';
 
@@ -20,7 +22,9 @@
     rows: Row[];
   };
 
-  export let data: { standings: any; error: string | null };
+  export let data: { standings: any; error: string | null } = { standings: null, error: null };
+  let standingsData: any = data?.standings ?? null;
+  let pageError: string | null = data?.error ?? null;
   let menuOpen = false;
   let menuPanelEl: HTMLDivElement | null = null;
   let menuListenersActive = false;
@@ -95,7 +99,18 @@
     return groups;
   }
 
-  $: groups = parseGroups(data.standings);
+  $: groups = parseGroups(standingsData);
+
+  onMount(() => {
+    if (standingsData || pageError) return;
+    nbaService.getStandings(true)
+      .then((standings) => {
+        standingsData = standings;
+      })
+      .catch((error: any) => {
+        pageError = error?.message ?? 'Failed to load standings';
+      });
+  });
 
   $: if (menuOpen) {
     addMenuOutsideListeners();
@@ -184,8 +199,8 @@
     </div>
   </div>
 
-  {#if data.error}
-    <div class="text-red-300">{data.error}</div>
+  {#if pageError}
+    <div class="text-red-300">{pageError}</div>
   {:else if groups.length === 0}
     <div class="text-white/70">No standings data available.</div>
   {:else}

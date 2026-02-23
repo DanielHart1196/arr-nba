@@ -1,4 +1,5 @@
 import type { INBADataSource } from './interfaces';
+import { resolveApiUrl } from '$lib/utils/runtime';
 
 export class ESPNDataSource implements INBADataSource {
   private isBrowser(): boolean {
@@ -14,7 +15,7 @@ export class ESPNDataSource implements INBADataSource {
         search.set('_ts', String(Date.now()));
       }
       const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
-      const res = await fetch(`/api/scoreboard?${search.toString()}`, fetchOpts);
+      const res = await fetch(resolveApiUrl(`/api/scoreboard?${search.toString()}`), fetchOpts);
       if (!res.ok) throw new Error(`Scoreboard API error: ${res.status}`);
       return res.json();
     }
@@ -36,7 +37,7 @@ export class ESPNDataSource implements INBADataSource {
       }
       const qs = search.toString();
       const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
-      const res = await fetch(`/api/standings${qs ? `?${qs}` : ''}`, fetchOpts);
+      const res = await fetch(resolveApiUrl(`/api/standings${qs ? `?${qs}` : ''}`), fetchOpts);
       if (!res.ok) throw new Error(`Standings API error: ${res.status}`);
       return res.json();
     }
@@ -58,7 +59,7 @@ export class ESPNDataSource implements INBADataSource {
       }
       const qs = search.toString();
       const fetchOpts = forceRefresh ? { cache: 'no-store' as RequestCache } : undefined;
-      const res = await fetch(`/api/summary/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ''}`, fetchOpts);
+      const res = await fetch(resolveApiUrl(`/api/summary/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ''}`), fetchOpts);
       if (!res.ok) throw new Error(`Summary API error: ${res.status}`);
       const payload = await res.json();
       if (payload?.error) throw new Error(String(payload.error));

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "node ./node_modules/vite/bin/vite.js build",
+    "build:capacitor": "powershell -NoProfile -Command \"$env:CAPACITOR_BUILD='1'; node ./node_modules/vite/bin/vite.js build\"",
     "build:local": "powershell -NoProfile -Command \"$env:LOCAL_BUILD='1'; node ./node_modules/vite/bin/vite.js build\"",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "preview": "vite preview",

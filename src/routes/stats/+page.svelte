@@ -4,6 +4,9 @@
   import { onMount } from 'svelte';
   import SeasonStatsModal from '$lib/components/stats/SeasonStatsModal.svelte';
   import { openSeasonStatsModal, updateSeasonStatsModal } from '$lib/stores/seasonStatsModal.store';
+  import { preferredHeadshotUrl } from '$lib/utils/headshots';
+  import { getSeasonLeadersWithFallback } from '$lib/utils/season-leaders';
+  import { resolveApiUrl } from '$lib/utils/runtime';
 
   export let data: { data: any; error: string | null };
 
@@ -222,9 +225,7 @@
       try {
         let json = seasonLeadersCache.get(apiCacheKey);
         if (!json) {
-          const res = await fetch(`/api/season-leaders?season=${encodeURIComponent(seasonKey)}&perMode=${perMode}`);
-          json = await res.json().catch(() => ({}));
-          if (!res.ok || json?.error) throw new Error(json?.error ?? `Failed to load season leaders (${res.status})`);
+          json = await getSeasonLeadersWithFallback(seasonKey, perMode);
           seasonLeadersCache.set(apiCacheKey, json);
         }
         applyPlayerData(json?.players ?? null);
@@ -253,9 +254,7 @@
     try {
       let json = seasonLeadersCache.get(apiCacheKey);
       if (!json) {
-        const res = await fetch(`/api/season-leaders?season=${encodeURIComponent(seasonKey)}&perMode=${perMode}`);
-        json = await res.json().catch(() => ({}));
-        if (!res.ok || json?.error) throw new Error(json?.error ?? `Failed to load teams (${res.status})`);
+        json = await getSeasonLeadersWithFallback(seasonKey, perMode);
         seasonLeadersCache.set(apiCacheKey, json);
       }
       teamsData = json?.teams ?? { headers: [], rows: [] };
@@ -387,7 +386,7 @@
 
 
   function espnHeadshotUrl(id?: string): string {
-    return id ? `https://a.espncdn.com/i/headshots/nba/players/full/${id}.png` : '';
+    return preferredHeadshotUrl(id);
   }
 
   function buildHistoryRows(playerRow: any): { season: string; row: Record<string, any> | null }[] {
@@ -447,6 +446,7 @@
   }
 
   onMount(() => {
+    loadSeason(season).catch(() => {});
     prefetchHistorySeasons().catch(() => {});
     addMenuOutsideListeners();
   });
@@ -460,9 +460,7 @@
   async function ensureCurrentPlayers(): Promise<void> {
     if (currentPlayersByMode[perMode]) return;
     try {
-      const res = await fetch(`/api/season-leaders?season=${encodeURIComponent(currentSeason)}&perMode=${perMode}`);
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || json?.error) throw new Error(json?.error ?? `Failed to load season leaders (${res.status})`);
+      const json = await getSeasonLeadersWithFallback(currentSeason, perMode);
       currentPlayersByMode[perMode] = json?.players ?? null;
     } catch {
       // ignore; history will just omit current season

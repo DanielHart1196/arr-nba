@@ -2,6 +2,8 @@
   import { onDestroy } from 'svelte';
   import type { Player } from '../../types/nba';
   import { openSeasonStatsModal, seasonStatsModal, updateSeasonStatsModal } from '../../stores/seasonStatsModal.store';
+  import { preferredHeadshotUrl } from '../../utils/headshots';
+  import { getSeasonLeadersWithFallback } from '../../utils/season-leaders';
 
   export let players: Player[];
 
@@ -36,7 +38,7 @@
   }
 
   function espnHeadshotUrl(id?: string): string {
-    return id ? `https://a.espncdn.com/i/headshots/nba/players/full/${id}.png` : '';
+    return preferredHeadshotUrl(id);
   }
 
   function pct(m: number, a: number) {
@@ -134,18 +136,8 @@
     seasonLoading = true;
     updateSeasonStatsModal({ loading: true });
     try {
-      const res = await fetch('/api/season-leaders');
-      const json = await res.json();
-      if (!res.ok || json?.error) {
-        if (!seasonData) {
-          seasonError = json?.error ?? `Failed to load season stats (${res.status})`;
-          seasonData = null;
-          updateSeasonStatsModal({ error: seasonError, loading: false });
-        } else {
-          updateSeasonStatsModal({ loading: false });
-        }
-        return;
-      }
+      const currentSeason = seasonFromDate();
+      const json = await getSeasonLeadersWithFallback(currentSeason, 'PerGame');
       seasonData = json;
       if (typeof localStorage !== 'undefined') {
         writeSeasonCache(json);
@@ -265,10 +257,10 @@
       let headers: string[] = [];
       for (const entry of staticHistory.seasons) {
         const season = String(entry?.season ?? '');
-        const players = entry?.players?.perGame ?? entry?.players ?? {};
-        const seasonHeaders = filterSeasonHeaders(players?.headers ?? []);
+        const playersBlock: any = entry?.players?.perGame ?? entry?.players ?? {};
+        const seasonHeaders = filterSeasonHeaders(playersBlock?.headers ?? []);
         if (seasonHeaders.length > 0 && headers.length === 0) headers = seasonHeaders;
-        const seasonRows = players?.rows ?? [];
+        const seasonRows = playersBlock?.rows ?? [];
         const byId = seasonRows.find((r: any) => String(r.PLAYER_ID ?? '') === playerId);
         let row = byId ?? null;
         if (!row && player?.name) {
