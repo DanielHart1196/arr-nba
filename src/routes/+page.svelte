@@ -4,6 +4,7 @@
   import { nbaService } from '../lib/services/nba.service';
   import { getTeamLogoAbbr, getTeamLogoPath } from '../lib/utils/team.utils';
   import TeamLogo from '../lib/components/TeamLogo.svelte';
+  import RefreshControl from '../lib/components/RefreshControl.svelte';
   import { addDays, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
   import { createTouchGestures } from '../lib/composables/touch-gestures';
   import type { Event as NBAEvent } from '../lib/types/nba';
@@ -407,6 +408,10 @@
     changeDate(delta);
   }
 
+  function goToToday(): void {
+    snapToIndex(START_INDEX);
+  }
+
   function openDatePicker() {
     const input = datePickerInput;
     if (!input) return;
@@ -746,9 +751,22 @@
 </script>
 
 <div bind:this={scoreboardContainer} class="p-4 min-h-screen swipe-area" style="touch-action: pan-y;" role="presentation" on:touchstart={cancelTrackAnimationForTap}>
-  <div class="flex items-center justify-end gap-3 mb-4" data-no-swipe="true">
-    <div class="flex items-center bg-white/5 border border-white/10 rounded overflow-hidden" data-no-swipe="true">
-        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-r border-white/10" on:pointerup={() => requestDateDelta(-1)} on:click={() => requestDateDelta(-1)}>&lt;</button>
+  <div class="relative z-50 grid h-7 grid-cols-[1fr_auto_1fr] items-center mb-4" data-no-swipe="true">
+    <div class="flex h-7 items-center justify-self-start" data-no-swipe="true">
+      <RefreshControl />
+    </div>
+    <div class="flex h-7 items-center justify-center bg-white/5 border border-white/10 rounded" data-no-swipe="true">
+        <button
+          data-no-swipe="true"
+          class="h-7 w-7 flex items-center justify-center hover:bg-white/10 border-r border-white/10"
+          aria-label="Go to today"
+          on:click|preventDefault={goToToday}
+        >
+          <svg viewBox="0 0 24 24" class="h-4 w-4 text-white/80" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="12" cy="12" r="8"></circle>
+            <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"></circle>
+          </svg>
+        </button>
         <button
           data-no-swipe="true"
           type="button"
@@ -767,74 +785,75 @@
           max={toLocalDateKey(getDateForIndex(TOTAL_DAYS - 1))}
           on:change={(e) => handleDatePicked((e.currentTarget as HTMLInputElement).value)}
         />
-        <button data-no-swipe="true" class="px-2.5 py-1 hover:bg-white/10 border-l border-white/10" on:pointerup={() => requestDateDelta(1)} on:click={() => requestDateDelta(1)}>&gt;</button>
+        <div class="relative flex items-center border-l border-white/10" data-no-swipe="true">
+          <button
+            data-no-swipe="true"
+            type="button"
+            aria-label="Open menu"
+            aria-expanded={menuOpen}
+            class="h-7 w-7 flex items-center justify-center text-white/80 hover:text-white"
+            on:click|preventDefault={toggleMenu}
+            bind:this={menuButtonEl}
+          >
+            <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M4 7h16M4 12h16M4 17h16"></path>
+            </svg>
+          </button>
+          {#if menuOpen}
+            <div
+              class="absolute right-0 top-10 z-[1001] w-44 rounded border border-white/15 bg-[#121212] shadow-lg"
+              data-no-swipe="true"
+              bind:this={menuPanelEl}
+            >
+              <a
+                data-no-swipe="true"
+                href="/"
+                class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
+                data-sveltekit-preload-data="tap"
+                data-sveltekit-preload-code="tap"
+                on:click|preventDefault={() => navigateFromMenu('/')}
+              >
+                Scoreboard
+              </a>
+              <a
+                data-no-swipe="true"
+                href="/standings"
+                class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+                data-sveltekit-preload-data="tap"
+                data-sveltekit-preload-code="tap"
+                on:click|preventDefault={() => navigateFromMenu('/standings')}
+              >
+                Standings
+              </a>
+              <a
+                data-no-swipe="true"
+                href="/stats"
+                class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
+                data-sveltekit-preload-data="tap"
+                data-sveltekit-preload-code="tap"
+                on:click|preventDefault={() => navigateFromMenu('/stats')}
+              >
+                Stats
+              </a>
+            </div>
+          {/if}
+        </div>
       </div>
-    <button
-      data-no-swipe="true"
-      type="button"
-      role="switch"
-      aria-label="Toggle scores visibility"
-      aria-checked={!hideScores}
-      class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
-      style="touch-action: manipulation;"
-      on:click|preventDefault={requestToggleHide}
-    >
-      <span
-        class="pointer-events-none absolute left-[2px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-transform duration-200 {hideScores ? '' : 'translate-x-5'}"
-      ></span>
-    </button>
-    <div class="relative flex items-center" data-no-swipe="true">
+    <div class="flex h-7 items-center justify-self-end" data-no-swipe="true">
       <button
         data-no-swipe="true"
         type="button"
-        aria-label="Open menu"
-        aria-expanded={menuOpen}
-        class="h-7 w-7 flex items-center justify-center text-white/80 hover:text-white"
-        on:click|preventDefault={toggleMenu}
-        bind:this={menuButtonEl}
+        role="switch"
+        aria-label="Toggle scores visibility"
+        aria-checked={!hideScores}
+        class="relative h-5 w-10 rounded-full border border-white/15 transition-colors {hideScores ? 'bg-white/10' : 'bg-[#4b5563]'}"
+        style="touch-action: manipulation;"
+        on:click|preventDefault={requestToggleHide}
       >
-        <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M4 7h16M4 12h16M4 17h16"></path>
-        </svg>
+        <span
+          class="pointer-events-none absolute left-[2px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-transform duration-200 {hideScores ? '' : 'translate-x-5'}"
+        ></span>
       </button>
-      {#if menuOpen}
-        <div
-          class="absolute right-0 top-10 z-[999] w-44 rounded border border-white/15 bg-[#121212] shadow-lg"
-          data-no-swipe="true"
-          bind:this={menuPanelEl}
-        >
-          <a
-            data-no-swipe="true"
-            href="/"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"
-            data-sveltekit-preload-data="tap"
-            data-sveltekit-preload-code="tap"
-            on:click|preventDefault={() => navigateFromMenu('/')}
-          >
-            Scoreboard
-          </a>
-          <a
-            data-no-swipe="true"
-            href="/standings"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
-            data-sveltekit-preload-data="tap"
-            data-sveltekit-preload-code="tap"
-            on:click|preventDefault={() => navigateFromMenu('/standings')}
-          >
-            Standings
-          </a>
-          <a
-            data-no-swipe="true"
-            href="/stats"
-            class="block w-full px-3 py-2 text-left text-sm hover:bg-white/10 border-t border-white/10"
-            data-sveltekit-preload-data="tap"
-            data-sveltekit-preload-code="tap"
-            on:click|preventDefault={() => navigateFromMenu('/stats')}
-          >
-            Stats
-          </a>
-        </div>
-      {/if}
     </div>
   </div>
   <div class="relative overflow-hidden" bind:clientWidth={cardsViewportWidth}>

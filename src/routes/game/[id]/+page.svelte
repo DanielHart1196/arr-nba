@@ -633,10 +633,8 @@
         </button>
       </div>
     {/if}
-  <div class="grid grid-cols-[auto_1fr_auto] items-center mb-2">
-    <button class="text-white/70 hover:text-white justify-self-start" on:click={() => goto('/')}>Back</button>
+  <div class="grid grid-cols-1 items-center mb-2">
     <div class="text-center text-sm text-white/75 font-medium">{formatHeaderDate(payload?.eventDate)}</div>
-    <button class="invisible pointer-events-none justify-self-end" tabindex="-1" aria-hidden="true">Back</button>
   </div>
   <div class="mt-2 mb-2 min-h-[60px] swipe-area">
     {#if payload?.linescores}
