@@ -24,9 +24,9 @@ function buildHeaders(): HeadersInit {
     'accept': 'application/json, text/plain, */*',
     'accept-language': 'en-US,en;q=0.9',
     'cache-control': 'no-cache',
-    'origin': 'https://stats.nba.com',
+    'origin': 'https://www.nba.com',
     'pragma': 'no-cache',
-    'referer': 'https://stats.nba.com/',
+    'referer': 'https://www.nba.com/stats/',
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'x-nba-stats-origin': 'stats',
     'x-nba-stats-token': 'true'
@@ -76,11 +76,33 @@ function buildDashParams(url: URL, season: string, measureType: 'Base' | 'Advanc
   url.searchParams.set('VsDivision', '');
 }
 
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      const err = new Error(`NBA ${label} stats timeout after ${timeoutMs}ms`);
+      (err as any).diagnostics = { timeoutMs, label };
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const GET = async ({ url }: any) => {
   const season = url.searchParams.get('season') || seasonFromDate();
   const perMode = url.searchParams.get('perMode') || 'PerGame';
-  const debug = url.searchParams.get('debug') === '1';
   const cacheKey = `season-stats:v2:${season}:${perMode}`;
+  const timeoutMs = 9000;
 
   try {
     const data = await apiCache.getOrFetch<SeasonLeadersPayload>(
@@ -98,8 +120,8 @@ export const GET = async ({ url }: any) => {
 
         const startedAt = Date.now();
         const [playerRes, teamRes] = await Promise.all([
-          fetch(playerUrl.toString(), { headers }),
-          fetch(teamUrl.toString(), { headers })
+          fetchWithTimeout(playerUrl.toString(), { headers }, timeoutMs, 'player'),
+          fetchWithTimeout(teamUrl.toString(), { headers }, timeoutMs, 'team')
         ]);
         const durationMs = Date.now() - startedAt;
 
@@ -147,14 +169,12 @@ export const GET = async ({ url }: any) => {
 
     return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e: any) {
-    if (debug) {
-      console.error('[season-leaders][debug]', {
-        season,
-        perMode,
-        error: e?.message,
-        diagnostics: e?.diagnostics ?? null
-      });
-    }
+    console.error('[season-leaders][error]', {
+      season,
+      perMode,
+      error: e?.message,
+      diagnostics: e?.diagnostics ?? null
+    });
     const lastGood = lastGoodByKey.get(cacheKey);
     if (lastGood && Date.now() - lastGood.ts <= LAST_GOOD_MAX_AGE_MS) {
       const stalePayload: SeasonLeadersPayload = {
@@ -168,15 +188,13 @@ export const GET = async ({ url }: any) => {
       });
     }
 
-    const debugPayload = debug
-      ? {
-          error: e?.message ?? 'unknown',
-          diagnostics: e?.diagnostics ?? null,
-          season,
-          perMode
-        }
-      : { error: e?.message ?? 'unknown' };
-    return new Response(JSON.stringify(debugPayload), {
+    const errorPayload = {
+      error: e?.message ?? 'unknown',
+      diagnostics: e?.diagnostics ?? null,
+      season,
+      perMode
+    };
+    return new Response(JSON.stringify(errorPayload), {
       status: 500,
       headers: { 'content-type': 'application/json' }
     });

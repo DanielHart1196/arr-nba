@@ -57,6 +57,20 @@ function buildDashParams(url: URL, season: string, measureType: 'Base' | 'Advanc
   url.searchParams.set('VsDivision', '');
 }
 
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchSeason(season: string): Promise<{ season: string; players: { headers: string[]; rows: any[] } }> {
   const cacheKey = `season-stats:v2:${season}`;
   const data = await apiCache.getOrFetch(
@@ -67,7 +81,7 @@ async function fetchSeason(season: string): Promise<{ season: string; players: {
       buildDashParams(playerUrl, season, 'Base');
       playerUrl.searchParams.set('StarterBench', '');
 
-      const res = await fetch(playerUrl.toString(), { headers });
+      const res = await fetchWithTimeout(playerUrl.toString(), { headers }, 9000);
       if (!res.ok) throw new Error(`NBA player stats error: ${res.status}`);
       const json = await res.json();
       const players = mapResult(json);
