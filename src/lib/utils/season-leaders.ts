@@ -1,4 +1,5 @@
 import { resolveApiUrl } from '$lib/utils/runtime';
+import { isNativeRuntime } from '$lib/utils/runtime';
 
 type LeadersBlock = { headers?: string[]; rows: any[] };
 type LeadersPayload = { players: LeadersBlock; teams: LeadersBlock };
@@ -14,6 +15,101 @@ type HistoryPayload = {
 };
 
 const EMPTY_BLOCK: LeadersBlock = { headers: [], rows: [] };
+
+function buildDashParams(season: string, perMode: 'PerGame' | 'Totals') {
+  return {
+    DateFrom: '',
+    DateTo: '',
+    GameScope: '',
+    GameSegment: '',
+    LastNGames: '0',
+    LeagueID: '00',
+    Location: '',
+    MeasureType: 'Base',
+    Month: '0',
+    OpponentTeamID: '0',
+    Outcome: '',
+    PORound: '0',
+    PaceAdjust: 'N',
+    PerMode: perMode,
+    Period: '0',
+    PlusMinus: 'N',
+    Rank: 'N',
+    Season: season,
+    SeasonSegment: '',
+    SeasonType: 'Regular Season',
+    ShotClockRange: '',
+    TeamID: '0',
+    TwoWay: '0',
+    VsConference: '',
+    VsDivision: ''
+  };
+}
+
+function mapResult(payload: any): LeadersBlock {
+  const resultSet = payload?.resultSet || payload?.resultSets?.[0];
+  if (!resultSet) return EMPTY_BLOCK;
+  const headers: string[] = Array.isArray(resultSet.headers) ? resultSet.headers : [];
+  const rowsRaw: any[] = Array.isArray(resultSet.rowSet) ? resultSet.rowSet : [];
+  const rows = rowsRaw.map((row) => {
+    const out: Record<string, any> = {};
+    headers.forEach((h, i) => {
+      out[h] = row?.[i];
+    });
+    return out;
+  });
+  return { headers, rows };
+}
+
+async function fetchNativeSeasonLeaders(
+  season: string,
+  perMode: 'PerGame' | 'Totals'
+): Promise<LeadersPayload | null> {
+  if (!isNativeRuntime()) return null;
+  try {
+    const { CapacitorHttp } = await import('@capacitor/core');
+    const headers = {
+      accept: 'application/json, text/plain, */*',
+      'accept-language': 'en-US,en;q=0.9',
+      origin: 'https://stats.nba.com',
+      referer: 'https://stats.nba.com/',
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'x-nba-stats-origin': 'stats',
+      'x-nba-stats-token': 'true'
+    };
+
+    const params = buildDashParams(season, perMode);
+    const [playerRes, teamRes] = await Promise.all([
+      CapacitorHttp.request({
+        method: 'GET',
+        url: 'https://stats.nba.com/stats/leaguedashplayerstats',
+        params,
+        headers,
+        connectTimeout: 20000,
+        readTimeout: 20000
+      }),
+      CapacitorHttp.request({
+        method: 'GET',
+        url: 'https://stats.nba.com/stats/leaguedashteamstats',
+        params,
+        headers,
+        connectTimeout: 20000,
+        readTimeout: 20000
+      })
+    ]);
+
+    if (playerRes.status < 200 || playerRes.status >= 300) return null;
+    if (teamRes.status < 200 || teamRes.status >= 300) return null;
+
+    const players = mapResult(typeof playerRes.data === 'string' ? JSON.parse(playerRes.data) : playerRes.data);
+    const teams = mapResult(typeof teamRes.data === 'string' ? JSON.parse(teamRes.data) : teamRes.data);
+
+    return { players, teams };
+  } catch {
+    return null;
+  }
+}
 
 async function readLocalHistory(): Promise<HistoryPayload | null> {
   try {
@@ -43,6 +139,9 @@ export async function getSeasonLeadersWithFallback(
     // Fallback below.
   }
 
+  const nativeDirect = await fetchNativeSeasonLeaders(season, perMode);
+  if (nativeDirect) return nativeDirect;
+
   const history = await readLocalHistory();
   const entry = (history?.seasons ?? []).find((s) => String(s?.season ?? '') === season);
   const players = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
@@ -52,4 +151,3 @@ export async function getSeasonLeadersWithFallback(
     teams: EMPTY_BLOCK
   };
 }
-
