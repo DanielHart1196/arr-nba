@@ -6,7 +6,7 @@ declare const self: ServiceWorkerGlobalScope;
 
 const STATIC_CACHE = `arrnba-static-${version}`;
 const DATA_CACHE = `arrnba-data-${version}`;
-const ASSETS = new Set([...build, ...files, '/', '/manifest.webmanifest']);
+const ASSETS = new Set([...build, ...files, '/', '/manifest.webmanifest', '/stats']);
 
 function isSameOriginAsset(url: URL): boolean {
   if (url.origin !== self.location.origin) return false;
@@ -14,7 +14,7 @@ function isSameOriginAsset(url: URL): boolean {
 }
 
 function isCachedApi(url: URL): boolean {
-  return false;
+  return url.origin === self.location.origin && url.pathname.startsWith('/api/season-leaders');
 }
 
 async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
@@ -45,7 +45,12 @@ async function networkFirst(request: Request, cacheName: string): Promise<Respon
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => cache.addAll(Array.from(ASSETS)))
+    (async () => {
+      const staticCache = await caches.open(STATIC_CACHE);
+      await staticCache.addAll(Array.from(ASSETS));
+      const dataCache = await caches.open(DATA_CACHE);
+      await dataCache.addAll(['/api/season-leaders']);
+    })()
   );
   self.skipWaiting();
 });
