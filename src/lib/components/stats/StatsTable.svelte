@@ -306,7 +306,7 @@
 
 <div class="border border-white/10 rounded text-xs scroll-container stats-table-container">
   <div class="grid" style="grid-template-columns: {nameColWidth} 1fr">
-    <div>
+    <div class="min-w-0">
       <div class="px-1 py-1 font-semibold text-left border-b-2 border-white/20">PLAYER</div>
       {#each displayRows as row, i}
         {#if i === 5}
@@ -314,7 +314,7 @@
         {/if}
         <button
           type="button"
-          class="border-t border-white/5 px-1 py-1 text-left truncate hover:text-white/90"
+          class="border-t border-white/5 px-1 py-1 text-left truncate w-full hover:text-white/90"
           on:click={() => openSeasonModal(row)}
         >
           {row.displayName}
