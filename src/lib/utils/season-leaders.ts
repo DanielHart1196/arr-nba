@@ -16,6 +16,16 @@ type HistoryPayload = {
 
 const EMPTY_BLOCK: LeadersBlock = { headers: [], rows: [] };
 
+async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function buildDashParams(season: string, perMode: 'PerGame' | 'Totals') {
   return {
     DateFrom: '',
@@ -127,7 +137,7 @@ export async function getSeasonLeadersWithFallback(
 ): Promise<LeadersPayload> {
   const apiUrl = resolveApiUrl(`/api/season-leaders?season=${encodeURIComponent(season)}&perMode=${perMode}`);
   try {
-    const res = await fetch(apiUrl);
+    const res = await fetchWithTimeout(apiUrl, 4000);
     const json = await res.json().catch(() => ({}));
     if (res.ok && !json?.error) {
       return {
