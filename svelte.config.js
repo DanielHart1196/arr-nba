@@ -1,9 +1,11 @@
 import autoAdapter from '@sveltejs/adapter-auto';
-import cloudflareAdapter from '@sveltejs/adapter-cloudflare';
 import staticAdapter from '@sveltejs/adapter-static';
 
 const isCapacitorBuild = process.env.CAPACITOR_BUILD === '1';
 const isCloudflarePages = Boolean(process.env.CF_PAGES || process.env.CF_PAGES_URL);
+const cloudflareAdapter = isCloudflarePages
+  ? (await import('@sveltejs/adapter-cloudflare')).default
+  : null;
 
 export default {
   kit: {
