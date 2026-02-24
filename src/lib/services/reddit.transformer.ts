@@ -22,7 +22,7 @@ export class RedditTransformer {
         return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
       })();
     const liveWindow = windowOverride?.live ?? (isDateOnly ? [-12 * 3600, 12 * 3600] : [-2 * 3600, 1 * 3600]);
-    const postWindow = windowOverride?.post ?? (isDateOnly ? [0 * 3600, 24 * 3600] : [2 * 3600, 5 * 3600]);
+    const postWindow = windowOverride?.post ?? (isDateOnly ? [0 * 3600, 24 * 3600] : [-1 * 3600, 18 * 3600]);
     const inWindow = (createdUtc: number): boolean => {
       if (!useHistoricRanking) {
         // If we do not have game date context, do not hard-expire PGT candidates.

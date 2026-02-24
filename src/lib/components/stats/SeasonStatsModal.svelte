@@ -128,7 +128,7 @@
 {#if $seasonStatsModal.open}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" on:click={closeSeasonStatsModal}>
     <div
-      class="w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[85vh] flex flex-col"
+      class="w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[92vh] flex flex-col"
       style="max-width:92vw;"
       on:click|stopPropagation
     >
@@ -222,7 +222,7 @@
               {:else if visibleHistory.length}
                 {#key $seasonStatsModal.playerId}
                   <div class="rounded border border-white/10">
-                    <div class="max-h-[26vh] overflow-auto" data-h-scroll>
+                    <div class="max-h-[40vh] overflow-auto" data-h-scroll>
                       <div
                         class="grid text-[11px] text-white/80"
                         style="width:max-content; grid-template-columns: 3.25rem 2.5rem {modalHeaders.map((h) => columnWidth(h)).join(' ')}"

@@ -287,7 +287,7 @@ export class RedditService {
       throw e;
     }
 
-    const result = this.transformer.transformSearch(
+    let result = this.transformer.transformSearch(
       json,
       request.type,
       request.eventDate,
@@ -295,6 +295,17 @@ export class RedditService {
       request.homeCandidates,
       request.window
     );
+    if (!result?.post && request.type === 'post' && request.eventDate) {
+      // Relax window for late/early PGTs.
+      result = this.transformer.transformSearch(
+        json,
+        request.type,
+        request.eventDate,
+        request.awayCandidates,
+        request.homeCandidates,
+        { ...request.window, post: [-1 * 3600, 18 * 3600] }
+      );
+    }
     if (result?.post && request.eventId) {
       this.writeEventThreadCache(request.eventId, request.type, result.post);
     }
@@ -342,15 +353,15 @@ export class RedditService {
         );
 
         if (!result?.post && request.type === 'post' && request.eventDate) {
-          result = this.transformer.transformSearch(
-            searchJson,
-            request.type,
-            request.eventDate,
-            request.awayCandidates,
-            request.homeCandidates,
-            { ...request.window, post: [0 * 3600, 12 * 3600] }
-          );
-        }
+        result = this.transformer.transformSearch(
+          searchJson,
+          request.type,
+          request.eventDate,
+          request.awayCandidates,
+          request.homeCandidates,
+          { ...request.window, post: [-1 * 3600, 18 * 3600] }
+        );
+      }
 
         this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
         return result;
@@ -392,7 +403,7 @@ export class RedditService {
           request.eventDate,
           request.awayCandidates,
           request.homeCandidates,
-          { ...request.window, post: [0 * 3600, 12 * 3600] }
+          { ...request.window, post: [-1 * 3600, 18 * 3600] }
         );
       }
 
@@ -476,9 +487,8 @@ export class RedditService {
     const base = request.type === 'post' ? '"POST GAME THREAD"' : '"GAME THREAD"';
     const terms = [...request.awayCandidates, ...request.homeCandidates].map(t => `"${t}"`).join(' ');
     const extra = request.type === 'live' ? ' -"POST GAME THREAD"' : '';
-    // Date token helps PGT relevance, but hurts LIVE because game-thread titles rarely include YYYY-MM-DD.
-    const dateToken = request.type === 'post' && request.eventDate ? ` "${request.eventDate}"` : '';
-    return `${base} ${terms}${dateToken}${extra}`;
+    // Date token hurts more than it helps (titles rarely include full ISO date-time).
+    return `${base} ${terms}${extra}`;
   }
 
   clearRedditCache(): void { this.cache.clear(); }
