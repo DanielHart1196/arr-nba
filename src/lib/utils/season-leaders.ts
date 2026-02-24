@@ -15,6 +15,13 @@ type HistoryPayload = {
 };
 
 const EMPTY_BLOCK: LeadersBlock = { headers: [], rows: [] };
+const NATIVE_CACHE_PREFIX = 'arrnba:native:season-leaders:';
+const NATIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type NativeCacheEntry = {
+  ts: number;
+  data: LeadersPayload;
+};
 
 async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
@@ -131,10 +138,51 @@ async function readLocalHistory(): Promise<HistoryPayload | null> {
   }
 }
 
+async function readNativeCache(key: string): Promise<NativeCacheEntry | null> {
+  if (!isNativeRuntime()) return null;
+  try {
+    const { Preferences } = await import('@capacitor/preferences');
+    const { value } = await Preferences.get({ key });
+    if (!value) return null;
+    const parsed = JSON.parse(value) as NativeCacheEntry;
+    if (!parsed || typeof parsed.ts !== 'number' || !parsed.data) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeNativeCache(key: string, data: LeadersPayload): Promise<void> {
+  if (!isNativeRuntime()) return;
+  try {
+    const { Preferences } = await import('@capacitor/preferences');
+    const payload: NativeCacheEntry = { ts: Date.now(), data };
+    await Preferences.set({ key, value: JSON.stringify(payload) });
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
 export async function getSeasonLeadersWithFallback(
   season: string,
   perMode: 'PerGame' | 'Totals'
 ): Promise<LeadersPayload> {
+  if (isNativeRuntime()) {
+    const cacheKey = `${NATIVE_CACHE_PREFIX}${season}:${perMode}`;
+    const cached = await readNativeCache(cacheKey);
+    if (cached && Date.now() - cached.ts < NATIVE_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    const nativeDirect = await fetchNativeSeasonLeaders(season, perMode);
+    if (nativeDirect) {
+      await writeNativeCache(cacheKey, nativeDirect);
+      return nativeDirect;
+    }
+
+    if (cached?.data) return cached.data;
+  }
+
   const apiUrl = resolveApiUrl(`/api/season-leaders?season=${encodeURIComponent(season)}&perMode=${perMode}`);
   try {
     const res = await fetchWithTimeout(apiUrl, 4000);
