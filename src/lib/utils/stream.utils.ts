@@ -1,3 +1,5 @@
+import { isNativeRuntime, resolveApiUrl } from '$lib/utils/runtime';
+
 export type ResolvedStream = {
   label: string;
   url: string;
@@ -18,44 +20,76 @@ function pickLastToken(value: string): string {
     .at(-1) ?? '';
 }
 
+type SharkApiResponse = {
+  ok?: boolean;
+  playerUrl?: string | null;
+  hlsUrl?: string | null;
+};
+
+async function fetchSharkLookup(url: string): Promise<SharkApiResponse | null> {
+  if (isNativeRuntime()) {
+    const { CapacitorHttp } = await import('@capacitor/core');
+    const response = await CapacitorHttp.request({
+      method: 'GET',
+      url,
+      headers: { Accept: 'application/json' },
+      connectTimeout: 12000,
+      readTimeout: 12000
+    });
+    if (response.status < 200 || response.status >= 300) return null;
+    return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+  }
+
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function toPlayableHlsUrl(hlsUrl: string): string {
+  if (!hlsUrl) return hlsUrl;
+  try {
+    const parsed = new URL(hlsUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'zafiles.cfd' || host.endsWith('.zafiles.cfd')) {
+      return `${resolveApiUrl('/api/hls-proxy')}?url=${encodeURIComponent(hlsUrl)}`;
+    }
+  } catch {
+    // Keep original URL if parsing fails.
+  }
+  return hlsUrl;
+}
+
 export async function findSharkStreamByTeams(
   awayDisplayName: string,
   homeDisplayName: string
 ): Promise<ResolvedStream | null> {
   if (!awayDisplayName || !homeDisplayName) return null;
-  if (typeof DOMParser === 'undefined') return null;
 
   const awayNeedle = pickLastToken(awayDisplayName);
   const homeNeedle = pickLastToken(homeDisplayName);
   if (!awayNeedle || !homeNeedle) return null;
 
   try {
-    const proxy = 'https://api.allorigins.win/get?url=';
-    const target = encodeURIComponent('https://sharkstreams.net/category/nba');
-    const res = await fetch(`${proxy}${target}`);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const html = typeof json?.contents === 'string' ? json.contents : '';
-    if (!html) return null;
+    const apiUrl =
+      `${resolveApiUrl('/api/streams/shark')}` +
+      `?away=${encodeURIComponent(awayNeedle)}` +
+      `&home=${encodeURIComponent(homeNeedle)}`;
+    const lookup = await fetchSharkLookup(apiUrl);
+    const playerUrl = typeof lookup?.playerUrl === 'string' ? lookup.playerUrl : '';
+    const hlsUrl = typeof lookup?.hlsUrl === 'string' ? lookup.hlsUrl : '';
+    if (!playerUrl && !hlsUrl) return null;
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const rows = Array.from(doc.querySelectorAll('.row'));
-    const match = rows.find((row) => {
-      const text = (row.textContent || '').toLowerCase();
-      return text.includes(awayNeedle) && text.includes(homeNeedle);
-    });
-    if (!match) return null;
-
-    const watchBtn = match.querySelector('.hd-link') as HTMLElement | null;
-    const onclick = watchBtn?.getAttribute('onclick') || '';
-    const urlMatch = onclick.match(/'([^']+player\.php\?channel=[^']+)'/);
-    const url = urlMatch?.[1];
-    if (!url) return null;
+    if (hlsUrl) {
+      return {
+        label: 'Watch Live (HLS)',
+        url: toPlayableHlsUrl(hlsUrl),
+        mode: 'video'
+      };
+    }
 
     return {
       label: 'Watch Live (SharkStreams)',
-      url,
+      url: playerUrl,
       mode: 'embed'
     };
   } catch {

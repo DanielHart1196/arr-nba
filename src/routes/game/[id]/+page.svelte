@@ -525,6 +525,30 @@
     return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   }
 
+  function extractRecordSummary(team: any): string {
+    if (!team) return '';
+    const recordSummary = team?.recordSummary;
+    if (typeof recordSummary === 'string' && recordSummary.trim()) return recordSummary.trim();
+    const record = team?.record;
+    if (typeof record === 'string' && record.trim()) return record.trim();
+    const firstRecordSummary = team?.records?.[0]?.summary;
+    if (typeof firstRecordSummary === 'string' && firstRecordSummary.trim()) return firstRecordSummary.trim();
+    return '';
+  }
+
+  function getTeamRecord(side: 'away' | 'home'): string {
+    const lineTeam = payload?.linescores?.[side]?.team;
+    const direct = extractRecordSummary(lineTeam);
+    if (direct) return direct;
+
+    const teamId = lineTeam?.id ? String(lineTeam.id) : '';
+    const teams = Array.isArray(payload?.boxscore?.teams) ? payload?.boxscore?.teams : [];
+    if (!teamId || teams.length === 0) return '';
+
+    const match = teams.find((entry: any) => String(entry?.team?.id ?? '') === teamId);
+    return extractRecordSummary(match?.team);
+  }
+
   async function prewarmSeasonLeaders(): Promise<void> {
     if (typeof localStorage === 'undefined') return;
     try {
@@ -647,11 +671,21 @@
       <div class="flex items-center justify-between text-lg font-semibold">
         <div class="flex items-center gap-2">
           <TeamLogo team={payload?.linescores?.away?.team ?? null} className="h-7 w-7 object-contain" alt="away" loading="eager" />
-          <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
+          <div class="flex flex-col leading-tight">
+            <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
+            {#if getTeamRecord('away')}
+              <span class="text-xs font-medium text-white/60">{getTeamRecord('away')}</span>
+            {/if}
+          </div>
         </div>
         <span>{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
         <div class="flex items-center gap-2">
-          <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
+          <div class="flex flex-col items-end leading-tight">
+            <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
+            {#if getTeamRecord('home')}
+              <span class="text-xs font-medium text-white/60">{getTeamRecord('home')}</span>
+            {/if}
+          </div>
           <TeamLogo team={payload?.linescores?.home?.team ?? null} className="h-7 w-7 object-contain" alt="home" loading="eager" />
         </div>
       </div>

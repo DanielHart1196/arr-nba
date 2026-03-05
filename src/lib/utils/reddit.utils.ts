@@ -2,6 +2,16 @@ import type { RedditComment } from '../types/nba';
 
 export function normalizeMascot(name: string): string {
   const s = (name || '').toLowerCase().trim();
+  const normalized = s.replace(/[^a-z0-9]+/g, ' ').trim();
+  const hasWholeTerm = (term: string): boolean => {
+    const t = term.toLowerCase();
+    return (
+      normalized === t ||
+      normalized.startsWith(`${t} `) ||
+      normalized.endsWith(` ${t}`) ||
+      normalized.includes(` ${t} `)
+    );
+  };
   const mascots = [
     'trail blazers', 'knicks', '76ers', 'lakers', 'celtics', 'warriors', 'nets',
     'raptors', 'bulls', 'cavaliers', 'pistons', 'pacers', 'bucks', 'heat',
@@ -10,7 +20,7 @@ export function normalizeMascot(name: string): string {
     'thunder', 'jazz', 'blazers'
   ];
   for (const m of mascots) {
-    if (s.includes(m)) {
+    if (hasWholeTerm(m)) {
       if (m === 'blazers' || m === 'trail blazers') return 'Trail Blazers';
       return m.split(' ').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
     }

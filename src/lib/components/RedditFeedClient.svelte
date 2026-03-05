@@ -13,9 +13,10 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { nbaService } from '../services/nba.service';
   import { createPairKey } from '../utils/reddit.utils';
+  import { expandTeamNames } from '../utils/team-matching.utils';
   import { getTeamLogoPathByAbbr, getTeamLogoScaleByAbbr } from '../utils/team.utils';
   import RedditCommentNode from './RedditCommentNode.svelte';
-  import type { RedditComment, RedditPost } from '../types/nba';
+  import type { RedditComment, RedditPost, RedditSearchDiagnostics } from '../types/nba';
 
   type FeedMode = 'LIVE' | 'POST';
   type ViewMode = FeedMode | 'STATS';
@@ -242,10 +243,10 @@
     if (!Number.isFinite(created)) return false;
     if (targetMode === 'LIVE') {
       if (dateOnly) return created >= target - (12 * 3600) && created <= target + (12 * 3600);
-      return created >= target - (2 * 3600) && created <= target + (1 * 3600);
+      return created >= target - (12 * 3600) && created <= target + (12 * 3600);
     }
     if (dateOnly) return created >= target + (0 * 3600) && created <= target + (24 * 3600);
-    return created >= target + (2 * 3600) && created <= target + (5 * 3600);
+    return created >= target - (1 * 3600) && created <= target + (18 * 3600);
   }
 
   function formatCreatedUtc(post?: RedditPost | null): string {
@@ -254,21 +255,75 @@
     return new Date(created * 1000).toISOString();
   }
 
+  function activeWindowSeconds(targetMode: FeedMode, dateStr?: string): [number, number] {
+    const targetMs = dateStr ? new Date(dateStr).getTime() : NaN;
+    const dateOnly =
+      Number.isFinite(targetMs) &&
+      (() => {
+        const d = new Date(targetMs);
+        return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+      })();
+    if (targetMode === 'LIVE') return dateOnly ? ([-12 * 3600, 12 * 3600] as [number, number]) : ([-12 * 3600, 12 * 3600] as [number, number]);
+    return dateOnly ? ([0 * 3600, 24 * 3600] as [number, number]) : ([-1 * 3600, 18 * 3600] as [number, number]);
+  }
+
+  function buildSearchQueryForDebug(targetMode: FeedMode): string {
+    const base = targetMode === 'POST' ? '"POST GAME THREAD"' : '"GAME THREAD"';
+    const awayTerms = expandTeamNames([awayName]).map((t) => `"${t}"`).join(' OR ');
+    const homeTerms = expandTeamNames([homeName]).map((t) => `"${t}"`).join(' OR ');
+    const terms = [awayTerms, homeTerms].filter(Boolean).map((group) => `(${group})`).join(' ');
+    const extra = targetMode === 'LIVE' ? ' -"POST GAME THREAD"' : '';
+    return `${base} ${terms}${extra}`.trim();
+  }
+
+  function compactDiagnostics(diag?: RedditSearchDiagnostics): Record<string, any> | undefined {
+    if (!diag) return undefined;
+    return {
+      windowSeconds: diag.windowSeconds,
+      counts: diag.counts,
+      selected: diag.selected ?? null,
+      samples: {
+        inWindow: (diag.samples?.inWindow ?? []).slice(0, 3),
+        modeMatch: (diag.samples?.modeMatch ?? []).slice(0, 3),
+        strictMatch: (diag.samples?.strictMatch ?? []).slice(0, 3)
+      }
+    };
+  }
+
+  function commonDebugContext(targetMode: FeedMode, targetSource: ThreadSource, origin: string): Record<string, any> {
+    return {
+      mode: targetMode,
+      source: targetSource,
+      origin,
+      eventId,
+      eventDate,
+      away: awayName,
+      home: homeName,
+      pairKey: createPairKey(awayName, homeName),
+      windowSeconds: activeWindowSeconds(targetMode, eventDate),
+      query: buildSearchQueryForDebug(targetMode)
+    };
+  }
+
   function debugLog(message: string, details?: Record<string, any>): void {
     if (!showDebug) return;
     if (details) {
-      console.log('[reddit][trace]', message, details);
+      console.log('[reddit][diag-trace]', message, details);
     } else {
-      console.log('[reddit][trace]', message);
+      console.log('[reddit][diag-trace]', message);
     }
   }
 
   function debugInfo(message: string, details: Record<string, any>): void {
-    pushInlineDebugLog('info', message, details);
-    console.log('[reddit][debug]', message, details);
+    pushInlineDebugLog('info', message, details, true);
   }
 
-  function pushInlineDebugLog(level: 'info' | 'warn' | 'error', message: string, details?: Record<string, any>): void {
+  function pushInlineDebugLog(
+    level: 'info' | 'warn' | 'error',
+    message: string,
+    details?: Record<string, any>,
+    mirrorToConsole: boolean = false
+  ): void {
     const entry = {
       at: new Date().toLocaleTimeString(),
       level,
@@ -276,25 +331,23 @@
       details
     };
     debugLogEntries = [entry, ...debugLogEntries].slice(0, 16);
+    if (showDebug || mirrorToConsole) {
+      const fn = level === 'error' ? console.error : (level === 'warn' ? console.warn : console.log);
+      fn('[reddit][diag]', message, details ?? {});
+    }
   }
 
-  function logThreadNotPopulated(targetMode: FeedMode, targetSource: ThreadSource, origin: string): void {
+  function logThreadNotPopulated(
+    targetMode: FeedMode,
+    targetSource: ThreadSource,
+    origin: string,
+    diagnostics?: RedditSearchDiagnostics
+  ): void {
     const key = `${targetMode}:${targetSource}:${origin}:${eventId || 'no-event'}:${awayName}|${homeName}:${eventDate ?? ''}`;
     if (key === lastThreadMissingLogKey) return;
     lastThreadMissingLogKey = key;
-    const details = {
-      mode: targetMode,
-      source: targetSource,
-      origin,
-      eventId,
-      away: awayName,
-      home: homeName,
-      eventDate
-    };
-    pushInlineDebugLog('warn', 'thread not populated', details);
-    console.warn('[reddit][missing-thread]', {
-      ...details
-    });
+    const details = { ...commonDebugContext(targetMode, targetSource, origin), diagnostics: compactDiagnostics(diagnostics) };
+    pushInlineDebugLog('warn', 'thread unresolved', details);
   }
 
   function isTruthyDebugFlag(value: string | null): boolean {
@@ -328,13 +381,7 @@
     if (key !== lastNoCommentsLogKey) {
       lastNoCommentsLogKey = key;
       logThreadNotPopulated(currentMode, currentSource, 'ui');
-      debugInfo('no comments yet (ui)', {
-        mode: currentMode,
-        source: currentSource,
-        eventId,
-        away: awayName,
-        home: homeName
-      });
+      debugInfo('low activity (ui)', commonDebugContext(currentMode, currentSource, 'ui'));
     }
   }
 
@@ -386,9 +433,8 @@
       if (requestId !== commentsRequestSeq || mode !== targetMode || selectedSourceByMode[targetMode] !== targetSource) return;
       debugLog(`commentsResult ${targetMode}/${targetSource} id=${post.id} count=${result.comments?.length ?? 0}`);
       if ((result.comments?.length ?? 0) === 0) {
-        debugInfo('no comments yet', {
-          mode: targetMode,
-          source: targetSource,
+        debugInfo('low activity comments', {
+          ...commonDebugContext(targetMode, targetSource, 'comments'),
           postId: post.id,
           permalink: post.permalink,
           sort
@@ -538,6 +584,11 @@
     try {
       let post: RedditPost | null = readStoredThread(targetMode, targetSource);
       if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
+        pushInlineDebugLog('warn', 'dropping cached thread outside window', {
+          ...commonDebugContext(targetMode, targetSource, 'storedCache'),
+          postId: post?.id,
+          postCreatedUtc: post?.created_utc
+        });
         post = null;
         clearStoredThread(targetMode, targetSource);
       }
@@ -545,7 +596,12 @@
         const eventCached = nbaService.getCachedThreadForEvent(eventId, targetMode === 'POST' ? 'post' : 'live');
         if (eventCached && (!eventDate || isThreadWithinWindow(eventCached, targetMode, eventDate))) {
           post = eventCached;
-          debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'eventCache', postId: post?.id, permalink: post?.permalink });
+          debugInfo('thread found', {
+            ...commonDebugContext(targetMode, targetSource, 'eventCache'),
+            postId: post?.id,
+            permalink: post?.permalink,
+            postCreatedUtc: post?.created_utc
+          });
         }
       }
 
@@ -555,9 +611,19 @@
           const entry = mapping[createPairKey(awayName, homeName)];
           post = (targetMode === 'POST' ? entry?.pgt : entry?.gdt) ?? null;
           if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
+            pushInlineDebugLog('warn', 'index hit rejected by window', {
+              ...commonDebugContext(targetMode, targetSource, 'index'),
+              postId: post?.id,
+              postCreatedUtc: post?.created_utc
+            });
             post = null;
           } else if (post) {
-            debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'index', postId: post?.id, permalink: post?.permalink });
+            debugInfo('thread found', {
+              ...commonDebugContext(targetMode, targetSource, 'index'),
+              postId: post?.id,
+              permalink: post?.permalink,
+              postCreatedUtc: post?.created_utc
+            });
           }
         } catch (error) {
           debugLog(`redditIndex failed ${(error as Error)?.message ?? 'unknown'}`);
@@ -598,20 +664,21 @@
         );
         post = result?.post ?? null;
         if (!post) {
-          logThreadNotPopulated(targetMode, targetSource, 'search');
+          logThreadNotPopulated(targetMode, targetSource, 'search', result?.diagnostics);
           debugInfo('no thread found', {
-            mode: targetMode,
-            source: 'reddit',
-            origin: 'search',
-            away: awayName,
-            home: homeName,
-            eventDate,
-            eventId
+            ...commonDebugContext(targetMode, targetSource, 'search'),
+            diagnostics: compactDiagnostics(result?.diagnostics)
           });
         }
 
         if (post) {
-          debugInfo('thread found', { mode: targetMode, source: 'reddit', origin: 'search', postId: post?.id, permalink: post?.permalink });
+          debugInfo('thread found', {
+            ...commonDebugContext(targetMode, targetSource, 'search'),
+            postId: post?.id,
+            permalink: post?.permalink,
+            postCreatedUtc: post?.created_utc,
+            diagnostics: compactDiagnostics(result?.diagnostics)
+          });
           cache[targetMode][targetSource].thread = post;
           writeStoredThread(targetMode, targetSource, post);
           cache = { ...cache };
@@ -632,7 +699,7 @@
     } catch (error) {
       console.error(`Error ensuring ${targetMode} r/nba thread:`, error);
       pushInlineDebugLog('error', `ensureReddit error (${targetMode})`, {
-        source: targetSource,
+        ...commonDebugContext(targetMode, targetSource, 'ensureReddit'),
         error: (error as Error)?.message ?? 'unknown'
       });
       triedFetch[targetMode][targetSource] = false;
@@ -673,7 +740,13 @@
       writeStoredThread(targetMode, targetSource, post);
       cache = { ...cache };
 
-      if (!post?.id) return;
+      if (!post?.id) {
+        pushInlineDebugLog('warn', 'prefetch team source found no thread', {
+          ...commonDebugContext(targetMode, targetSource, `subreddit:${subreddit}`),
+          diagnostics: compactDiagnostics(result?.diagnostics)
+        });
+        return;
+      }
       const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
       const commentsResult = await nbaService.getRedditComments(post.id, sort, post.permalink);
       const nextComments = sortedCopy(commentsResult.comments ?? [], sort);
@@ -683,6 +756,11 @@
       cache = { ...cache };
     } catch (error) {
       console.warn(`Background prefetch failed for ${targetSource} source:`, error);
+      pushInlineDebugLog('warn', 'prefetch team source failed', {
+        ...commonDebugContext(targetMode, targetSource, 'prefetchTeam'),
+        subreddit,
+        error: (error as Error)?.message ?? 'unknown'
+      });
     }
   }
 
@@ -718,6 +796,11 @@
 
     let existing = cache[targetMode][targetSource].thread ?? readStoredThread(targetMode, targetSource);
     if (eventDate && !isThreadWithinWindow(existing, targetMode, eventDate)) {
+      pushInlineDebugLog('warn', 'dropping team cached thread outside window', {
+        ...commonDebugContext(targetMode, targetSource, 'teamStoredCache'),
+        postId: existing?.id,
+        postCreatedUtc: existing?.created_utc
+      });
       existing = null;
       clearStoredThread(targetMode, targetSource);
     }
@@ -771,12 +854,17 @@
       if (post) {
         await fetchCommentsFor(post, sort, targetMode, targetSource);
       } else {
-        logThreadNotPopulated(targetMode, targetSource, `subreddit:${subreddit}`);
+        logThreadNotPopulated(targetMode, targetSource, `subreddit:${subreddit}`, result?.diagnostics);
+        debugInfo('no team thread found', {
+          ...commonDebugContext(targetMode, targetSource, `subreddit:${subreddit}`),
+          diagnostics: compactDiagnostics(result?.diagnostics)
+        });
         loading = false;
       }
     } catch (error: unknown) {
       console.error(`Failed to load r/${subreddit} thread:`, error);
       pushInlineDebugLog('error', `team thread load failed (${targetMode}/${targetSource})`, {
+        ...commonDebugContext(targetMode, targetSource, 'ensureTeam'),
         subreddit,
         error: (error as Error)?.message ?? 'unknown'
       });
@@ -929,10 +1017,15 @@
     if (typeof window === 'undefined') return;
     showDebug = resolveShowDebugFromClient();
     if (showDebug) {
-      console.log('[reddit][debug] trace logging enabled', {
-        redditDebug: new URLSearchParams(window.location.search).get('redditDebug'),
-        debug: new URLSearchParams(window.location.search).get('debug')
-      });
+      pushInlineDebugLog(
+        'info',
+        'reddit diagnostics enabled',
+        {
+          redditDebug: new URLSearchParams(window.location.search).get('redditDebug'),
+          debug: new URLSearchParams(window.location.search).get('debug')
+        },
+        true
+      );
     }
     if ('requestIdleCallback' in window) {
       const idle = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
@@ -1031,9 +1124,9 @@
     </div>
   {:else if !thread && !hasVisibleComments}
     <div class="space-y-2">
-      <div class="text-white/70">No comments yet.</div>
+      <div class="text-white/70">Low thread activity right now.</div>
       <div class="rounded border border-yellow-500/30 bg-yellow-950/20 p-2 text-[11px] text-yellow-100/90">
-        <div class="font-semibold text-yellow-200/95 mb-1">Reddit Diagnostics</div>
+        <div class="font-semibold text-yellow-200/95 mb-1">Reddit debug</div>
         <div class="text-yellow-50/80 mb-1">
           mode={currentMode ?? '-'} source={currentSource} eventId={eventId ?? '-'}
         </div>

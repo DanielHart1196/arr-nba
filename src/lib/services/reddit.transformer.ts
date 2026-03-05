@@ -1,5 +1,6 @@
-import type { RedditPost, RedditComment, RedditThreadMapping } from '$lib/types/nba';
+import type { RedditPost, RedditComment, RedditThreadMapping, RedditSearchDiagnostics } from '$lib/types/nba';
 import { normalizeMascot } from '$lib/utils/reddit.utils';
+import { expandTeamNames } from '$lib/utils/team-matching.utils';
 
 export class RedditTransformer {
   transformSearch(
@@ -9,7 +10,7 @@ export class RedditTransformer {
     awayCandidates: string[] = [],
     homeCandidates: string[] = [],
     windowOverride?: { live?: [number, number]; post?: [number, number] }
-  ): { post?: RedditPost } {
+  ): { post?: RedditPost; diagnostics?: RedditSearchDiagnostics } {
     const items = json?.data?.children ?? [];
     const now = Date.now() / 1000;
     
@@ -21,8 +22,8 @@ export class RedditTransformer {
         const d = new Date(eventDate as string);
         return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
       })();
-    const liveWindow = windowOverride?.live ?? (isDateOnly ? [-12 * 3600, 12 * 3600] : [-2 * 3600, 1 * 3600]);
-    const postWindow = windowOverride?.post ?? (isDateOnly ? [0 * 3600, 24 * 3600] : [-1 * 3600, 18 * 3600]);
+    const liveWindow: [number, number] = windowOverride?.live ?? (isDateOnly ? [-12 * 3600, 12 * 3600] : [-12 * 3600, 12 * 3600]);
+    const postWindow: [number, number] = windowOverride?.post ?? (isDateOnly ? [0 * 3600, 24 * 3600] : [-1 * 3600, 18 * 3600]);
     const inWindow = (createdUtc: number): boolean => {
       if (!useHistoricRanking) {
         // If we do not have game date context, do not hard-expire PGT candidates.
@@ -32,10 +33,10 @@ export class RedditTransformer {
       }
       const target = targetTs as number;
       if (type === 'live') {
-        // Live threads: 2 hours before tipoff to 1 hour after.
+        // Live threads can remain active through long games/overtime.
         return createdUtc >= target + liveWindow[0] && createdUtc <= target + liveWindow[1];
       }
-      // Post-game threads: 2-5 hours after tipoff.
+      // Post-game threads: use a broader window to catch early/late posting.
       return createdUtc >= target + postWindow[0] && createdUtc <= target + postWindow[1];
     };
     const fresh = items.filter((i: any) => inWindow(i?.data?.created_utc ?? 0));
@@ -43,7 +44,8 @@ export class RedditTransformer {
     const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const expandCandidates = (candidates: string[]): string[] => {
       const out = new Set<string>();
-      for (const raw of candidates ?? []) {
+      const expanded = expandTeamNames(candidates ?? []);
+      for (const raw of expanded) {
         const n = normalize(raw);
         if (!n) continue;
         out.add(n);
@@ -85,8 +87,35 @@ export class RedditTransformer {
 
     // For historical lookup, choose the closest thread date to the game date.
     // Otherwise pick the latest fresh thread.
+    const sample = (arr: any[]) =>
+      (arr ?? []).slice(0, 6).map((i: any) => ({
+        id: i?.data?.id,
+        title: i?.data?.title,
+        created_utc: i?.data?.created_utc
+      }));
+
     if (useHistoricRanking && filtered.length === 0) {
-      return { post: undefined };
+      return {
+        post: undefined,
+        diagnostics: {
+          type,
+          eventDate,
+          windowSeconds: type === 'live' ? liveWindow : postWindow,
+          counts: {
+            total: items.length,
+            inWindow: fresh.length,
+            modeMatch: modeFiltered.length,
+            strictMatch: strictFiltered.length,
+            finalPool: 0
+          },
+          selected: null,
+          samples: {
+            inWindow: sample(fresh),
+            modeMatch: sample(modeFiltered),
+            strictMatch: sample(strictFiltered)
+          }
+        }
+      };
     }
 
     const sorted = filtered.sort((a: any, b: any) => {
@@ -109,7 +138,34 @@ export class RedditTransformer {
       score: i?.data?.score
     }));
 
-    return { post: mapped[0] || null };
+    const selected = mapped[0] || null;
+    return {
+      post: selected,
+      diagnostics: {
+        type,
+        eventDate,
+        windowSeconds: type === 'live' ? liveWindow : postWindow,
+        counts: {
+          total: items.length,
+          inWindow: fresh.length,
+          modeMatch: modeFiltered.length,
+          strictMatch: strictFiltered.length,
+          finalPool: filtered.length
+        },
+        selected: selected
+          ? {
+              id: selected.id,
+              title: selected.title,
+              created_utc: selected.created_utc
+            }
+          : null,
+        samples: {
+          inWindow: sample(fresh),
+          modeMatch: sample(modeFiltered),
+          strictMatch: sample(strictFiltered)
+        }
+      }
+    };
   }
 
   transformComments(json: any): { comments: RedditComment[] } {

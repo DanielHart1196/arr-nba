@@ -9,6 +9,7 @@ import type {
 import type { IRedditDataSource } from './interfaces';
 import type { RedditTransformer } from './reddit.transformer';
 import { createPairKey } from '$lib/utils/reddit.utils';
+import { expandTeamNames } from '$lib/utils/team-matching.utils';
 import { idbGet, idbSet } from '$lib/cache/indexeddb-cache';
 
 export class RedditService {
@@ -485,7 +486,9 @@ export class RedditService {
 
   private buildSearchQuery(request: RedditSearchRequest): string {
     const base = request.type === 'post' ? '"POST GAME THREAD"' : '"GAME THREAD"';
-    const terms = [...request.awayCandidates, ...request.homeCandidates].map(t => `"${t}"`).join(' ');
+    const awayTerms = expandTeamNames(request.awayCandidates ?? []).map((t) => `"${t}"`).join(' OR ');
+    const homeTerms = expandTeamNames(request.homeCandidates ?? []).map((t) => `"${t}"`).join(' OR ');
+    const terms = [awayTerms, homeTerms].filter(Boolean).map((group) => `(${group})`).join(' ');
     const extra = request.type === 'live' ? ' -"POST GAME THREAD"' : '';
     // Date token hurts more than it helps (titles rarely include full ISO date-time).
     return `${base} ${terms}${extra}`;

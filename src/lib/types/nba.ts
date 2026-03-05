@@ -150,6 +150,30 @@ export interface RedditSearchRequest {
   };
 }
 
+export interface RedditSearchDiagnostics {
+  type: 'live' | 'post';
+  eventDate?: string;
+  windowSeconds: [number, number];
+  counts: {
+    total: number;
+    inWindow: number;
+    modeMatch: number;
+    strictMatch: number;
+    finalPool: number;
+  };
+  selected?: {
+    id?: string;
+    title?: string;
+    created_utc?: number;
+  } | null;
+  samples: {
+    inWindow: Array<{ id?: string; title?: string; created_utc?: number }>;
+    modeMatch: Array<{ id?: string; title?: string; created_utc?: number }>;
+    strictMatch: Array<{ id?: string; title?: string; created_utc?: number }>;
+  };
+}
+
 export interface RedditSearchResponse {
   post?: RedditPost;
+  diagnostics?: RedditSearchDiagnostics;
 }

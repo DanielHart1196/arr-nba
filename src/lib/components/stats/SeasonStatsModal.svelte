@@ -117,8 +117,22 @@
     return rows.filter((entry) => Boolean(entry?.row));
   }
 
+  function getPlayerTeamAbbr(): string {
+    const direct = String($seasonStatsModal.team ?? '').trim();
+    if (direct) return direct.toUpperCase();
+
+    const fromRow = String($seasonStatsModal.row?.TEAM_ABBREVIATION ?? '').trim();
+    if (fromRow) return fromRow.toUpperCase();
+
+    const fromHistory = String($seasonStatsModal.historyRows?.[0]?.row?.TEAM_ABBREVIATION ?? '').trim();
+    if (fromHistory) return fromHistory.toUpperCase();
+
+    return '';
+  }
+
   $: visibleHistory = trimHistory($seasonStatsModal.historyRows ?? []);
   $: modalHeaders = normalizeHeaders($seasonStatsModal.headers ?? []);
+  $: playerTeamAbbr = getPlayerTeamAbbr();
 
   $: if ($seasonStatsModal.open) {
     tick();
@@ -128,11 +142,11 @@
 {#if $seasonStatsModal.open}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" on:click={closeSeasonStatsModal}>
     <div
-      class="w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[92vh] flex flex-col"
+      class="w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[calc(90svh-2rem)] flex flex-col"
       style="max-width:92vw;"
       on:click|stopPropagation
     >
-      <div class="relative p-4 pb-6 overflow-hidden flex flex-col gap-4 min-h-0">
+      <div class="relative p-4 pb-4 overflow-hidden flex flex-col gap-4 min-h-0 h-full">
         <button
           class="absolute right-3 top-3 text-white/60 hover:text-white text-sm"
           aria-label="Close"
@@ -145,84 +159,89 @@
         {:else if $seasonStatsModal.error}
           <div class="text-sm text-red-300">{$seasonStatsModal.error}</div>
         {:else if $seasonStatsModal.player}
-          <div class="flex items-center gap-3">
-            {#if headshotSrc}
-              <img
-                src={headshotSrc}
-                alt={$seasonStatsModal.player?.name}
-                class="h-20 w-20 rounded bg-black/40 object-cover"
-                loading="lazy"
-                decoding="async"
-                on:error={advanceHeadshot}
-              />
-            {/if}
-            <div class="min-w-0">
-              <div class="text-base font-semibold text-white truncate">{$seasonStatsModal.player.name}</div>
-              <div class="text-xs text-white/60 flex flex-col">
-                <div class="inline-flex items-center gap-1">
-                  {#if $seasonStatsModal.team}
-                    <span class="inline-flex items-center gap-1">
-                      <TeamLogo abbr={$seasonStatsModal.team} className="h-3 w-3" alt={$seasonStatsModal.team} />
-                      <span>{$seasonStatsModal.team}</span>
-                    </span>
+          <div class="flex min-h-0 flex-1 flex-col gap-3">
+            <div class="flex items-center gap-3">
+              {#if headshotSrc}
+                <img
+                  src={headshotSrc}
+                  alt={$seasonStatsModal.player?.name}
+                  class="h-20 w-20 rounded bg-black/40 object-cover"
+                  loading="lazy"
+                  decoding="async"
+                  on:error={advanceHeadshot}
+                />
+              {/if}
+              <div class="min-w-0">
+                <div class="text-base font-semibold text-white truncate">{$seasonStatsModal.player.name}</div>
+                <div class="text-xs text-white/60 flex flex-col">
+                  <div class="inline-flex items-center gap-1">
+                    {#if playerTeamAbbr}
+                      <span class="inline-flex items-center gap-1">
+                        <TeamLogo abbr={playerTeamAbbr} className="h-3 w-3" alt={playerTeamAbbr} />
+                        <span>{playerTeamAbbr}</span>
+                      </span>
+                    {/if}
+                    {#if playerTeamAbbr && $seasonStatsModal.player.position} · {/if}
+                    {#if $seasonStatsModal.player.position}{$seasonStatsModal.player.position}{/if}
+                    {#if (playerTeamAbbr || $seasonStatsModal.player.position) && $seasonStatsModal.player.jersey} · {/if}
+                    {#if $seasonStatsModal.player.jersey}#{$seasonStatsModal.player.jersey}{/if}
+                  </div>
+                  {#if $seasonStatsModal.seasonLabel}
+                    <div>{$seasonStatsModal.seasonLabel}</div>
                   {/if}
-                  {#if $seasonStatsModal.team && $seasonStatsModal.player.position} · {/if}
-                  {#if $seasonStatsModal.player.position}{$seasonStatsModal.player.position}{/if}
-                  {#if ($seasonStatsModal.team || $seasonStatsModal.player.position) && $seasonStatsModal.player.jersey} · {/if}
-                  {#if $seasonStatsModal.player.jersey}#{$seasonStatsModal.player.jersey}{/if}
                 </div>
-                {#if $seasonStatsModal.seasonLabel}
-                  <div>{$seasonStatsModal.seasonLabel}</div>
-                {/if}
               </div>
             </div>
-          </div>
 
-          {#if $seasonStatsModal.row}
-            <div class="grid grid-cols-2 gap-2 text-xs text-white/80">
-              <div class="rounded border border-white/10 px-2 py-1">GP {$seasonStatsModal.row.GP ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">MIN {$seasonStatsModal.row.MIN ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">PTS {$seasonStatsModal.row.PTS ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">REB {$seasonStatsModal.row.REB ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">AST {$seasonStatsModal.row.AST ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">STL {$seasonStatsModal.row.STL ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">BLK {$seasonStatsModal.row.BLK ?? '-'}</div>
-              <div class="rounded border border-white/10 px-2 py-1">% {formatTriplePct($seasonStatsModal.row)}</div>
-            </div>
-            {#if $seasonStatsModal.headers?.length}
-              <div class="border-t border-white/10 pt-3">
-                <div class="text-xs font-semibold text-white/70 mb-2">
-                  {$seasonStatsModal.seasonLabel || 'Season Stats'}
-                </div>
-                <div class="relative rounded border border-white/10">
-                  <div class="overflow-x-auto" data-h-scroll>
-                    <div
-                      class="grid text-[11px] text-white/80"
-                      style="width:max-content; grid-template-columns: {modalHeaders.map((h) => columnWidth(h)).join(' ')}"
-                    >
-                      {#each modalHeaders as header}
-                        <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px]">
-                          {displayHeader(header)}
-                        </div>
-                      {/each}
-                      {#each modalHeaders as header}
-                        <div class="py-1 text-center">{formatModalValue(header, $seasonStatsModal.row)}</div>
-                      {/each}
+            {#if $seasonStatsModal.row}
+              <div class="grid grid-cols-2 gap-2 text-xs text-white/80">
+                <div class="rounded border border-white/10 px-2 py-1">GP {$seasonStatsModal.row.GP ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">MIN {$seasonStatsModal.row.MIN ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">PTS {$seasonStatsModal.row.PTS ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">REB {$seasonStatsModal.row.REB ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">AST {$seasonStatsModal.row.AST ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">STL {$seasonStatsModal.row.STL ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">BLK {$seasonStatsModal.row.BLK ?? '-'}</div>
+                <div class="rounded border border-white/10 px-2 py-1">% {formatTriplePct($seasonStatsModal.row)}</div>
+              </div>
+              {#if $seasonStatsModal.headers?.length}
+                <div class="border-t border-white/10 pt-3">
+                  <div class="text-xs font-semibold text-white/70 mb-2">
+                    {$seasonStatsModal.seasonLabel || 'Season Stats'}
+                  </div>
+                  <div class="relative rounded border border-white/10">
+                    <div class="overflow-x-auto" data-h-scroll>
+                      <div
+                        class="grid text-[11px] text-white/80"
+                        style="width:max-content; grid-template-columns: {modalHeaders.map((h) => columnWidth(h)).join(' ')}"
+                      >
+                        {#each modalHeaders as header}
+                          <div class="py-1 text-center font-semibold border-b border-white/10 text-[10px]">
+                            {displayHeader(header)}
+                          </div>
+                        {/each}
+                        {#each modalHeaders as header}
+                          <div class="py-1 text-center">{formatModalValue(header, $seasonStatsModal.row)}</div>
+                        {/each}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            {/if}
-            <div class="border-t border-white/10 pt-3">
-              <div class="text-xs font-semibold text-white/70 mb-2">Season History</div>
-              {#if $seasonStatsModal.historyLoading}
-                <div class="text-xs text-white/60">Loading season history...</div>
-              {:else if $seasonStatsModal.historyError}
-                <div class="text-xs text-red-300">{$seasonStatsModal.historyError}</div>
-              {:else if visibleHistory.length}
-                {#key $seasonStatsModal.playerId}
-                  <div class="rounded border border-white/10">
-                    <div class="max-h-[40vh] overflow-auto" data-h-scroll>
+              {/if}
+              <div class="border-t border-white/10 pt-3 min-h-0 flex-1 flex flex-col">
+                <div class="text-xs font-semibold text-white/70 mb-2">Season History</div>
+                {#if $seasonStatsModal.historyLoading}
+                  <div class="text-xs text-white/60">Loading season history...</div>
+                {:else if $seasonStatsModal.historyError}
+                  <div class="text-xs text-red-300">{$seasonStatsModal.historyError}</div>
+                {:else if visibleHistory.length}
+                  {#key $seasonStatsModal.playerId}
+                    <div
+                      class="rounded border border-white/10 max-h-[32svh] overflow-auto pr-1 pb-2 scroll-container"
+                      data-scrollable="true"
+                      data-no-swipe="true"
+                      style="touch-action: auto; -webkit-overflow-scrolling: touch;"
+                    >
                       <div
                         class="grid text-[11px] text-white/80"
                         style="width:max-content; grid-template-columns: 3.25rem 2.5rem {modalHeaders.map((h) => columnWidth(h)).join(' ')}"
@@ -247,16 +266,15 @@
                         {/each}
                       </div>
                     </div>
-                  </div>
-                {/key}
-              {:else}
-                <div class="text-xs text-white/60">No season history found.</div>
-              {/if}
-            </div>
-            <div class="h-4"></div>
-          {:else}
-            <div class="mt-4 text-xs text-white/60">Season stats not found for this player.</div>
-          {/if}
+                  {/key}
+                {:else}
+                  <div class="text-xs text-white/60">No season history found.</div>
+                {/if}
+              </div>
+            {:else}
+              <div class="mt-4 text-xs text-white/60">Season stats not found for this player.</div>
+            {/if}
+          </div>
         {/if}
       </div>
     </div>
