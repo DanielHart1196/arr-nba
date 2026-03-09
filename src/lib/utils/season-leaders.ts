@@ -11,6 +11,10 @@ type HistoryPayload = {
       perGame?: LeadersBlock;
       totals?: LeadersBlock;
     };
+    teams?: {
+      perGame?: LeadersBlock;
+      totals?: LeadersBlock;
+    };
   }>;
 };
 
@@ -31,6 +35,10 @@ async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number): Pr
   } finally {
     clearTimeout(timer);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildDashParams(season: string, perMode: 'PerGame' | 'Totals') {
@@ -184,17 +192,23 @@ export async function getSeasonLeadersWithFallback(
   }
 
   const apiUrl = resolveApiUrl(`/api/season-leaders?season=${encodeURIComponent(season)}&perMode=${perMode}`);
-  try {
-    const res = await fetchWithTimeout(apiUrl, 4000);
-    const json = await res.json().catch(() => ({}));
-    if (res.ok && !json?.error) {
-      return {
-        players: (json?.players ?? EMPTY_BLOCK) as LeadersBlock,
-        teams: (json?.teams ?? EMPTY_BLOCK) as LeadersBlock
-      };
+  const apiTimeoutAttempts = [6000, 12000];
+  for (let i = 0; i < apiTimeoutAttempts.length; i++) {
+    try {
+      const res = await fetchWithTimeout(apiUrl, apiTimeoutAttempts[i]);
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && !json?.error) {
+        return {
+          players: (json?.players ?? EMPTY_BLOCK) as LeadersBlock,
+          teams: (json?.teams ?? EMPTY_BLOCK) as LeadersBlock
+        };
+      }
+    } catch {
+      // Retry before falling back.
     }
-  } catch {
-    // Fallback below.
+    if (i < apiTimeoutAttempts.length - 1) {
+      await sleep(220);
+    }
   }
 
   const nativeDirect = await fetchNativeSeasonLeaders(season, perMode);
@@ -203,9 +217,10 @@ export async function getSeasonLeadersWithFallback(
   const history = await readLocalHistory();
   const entry = (history?.seasons ?? []).find((s) => String(s?.season ?? '') === season);
   const players = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
+  const teams = perMode === 'Totals' ? entry?.teams?.totals : entry?.teams?.perGame;
 
   return {
     players: (players ?? EMPTY_BLOCK) as LeadersBlock,
-    teams: EMPTY_BLOCK
+    teams: (teams ?? EMPTY_BLOCK) as LeadersBlock
   };
 }

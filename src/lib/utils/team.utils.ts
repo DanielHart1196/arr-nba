@@ -67,6 +67,7 @@ export function getTeamLogoScaleByAbbr(abbr: string, baseScale = 1): number {
     ORL: 0.9,
     SAC: 0.9,
     SAS: 0.88,
+    TOR: 0.94,
     UTA: 0.9
   };
   return baseScale * (perTeamScale[normalized] ?? 1);

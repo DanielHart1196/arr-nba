@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto, preloadCode, preloadData } from '$app/navigation';
   import { nbaService } from '../lib/services/nba.service';
-  import { getTeamLogoAbbr, getTeamLogoPath } from '../lib/utils/team.utils';
+  import { getTeamLogoAbbr } from '../lib/utils/team.utils';
   import TeamLogo from '../lib/components/TeamLogo.svelte';
   import RefreshControl from '../lib/components/RefreshControl.svelte';
   import { addDays, mergeUniqueAndSortEvents, toScoreboardDateKey } from '../lib/utils/scoreboard.utils';
@@ -17,8 +17,6 @@
     awayScore: string | number;
     homeScore: string | number;
     statusText: string;
-    awayLogo: string;
-    homeLogo: string;
     scheduled: boolean;
   };
 
@@ -33,10 +31,15 @@
   const SWIPE_ANIM_MS = 120;
 
   const SCHEDULE_PREFETCH_KEY = 'arrnba.schedulePrefetch.v2';
+  const FULL_SCHEDULE_PREFETCH_KEY = 'arrnba.fullSchedulePrefetch.v1';
   const PREFETCH_PAST_DAYS = 2;
   const PREFETCH_FUTURE_DAYS = 2;
   const PREFETCH_CONCURRENCY = 1;
   const PREFETCH_CHUNK_PAUSE_MS = 120;
+  const FULL_PREFETCH_CONCURRENCY = 2;
+  const FULL_PREFETCH_CHUNK_SIZE = 8;
+  const FULL_PREFETCH_CHUNK_PAUSE_MS = 80;
+  const FULL_PREFETCH_TTL_MS = 12 * 60 * 60 * 1000;
   const CACHE_HYDRATE_WINDOW_DAYS = 7;
 
   let baseDate = localStartOfToday();
@@ -148,12 +151,22 @@
 
     // Do not hydrate empty arrays from partial/stale bucket cache; let loadDay fetch instead.
     if (filtered.length === 0) return null;
+    if (eventsNeedScoreRefresh(filtered)) return null;
     return filtered;
   }
 
   function hydrateNearbyDaysFromBrowserCache(seed: Record<number, NBAEvent[]>, centerIndex: number): Record<number, NBAEvent[]> {
     if (typeof window === 'undefined') return seed;
     const next: Record<number, NBAEvent[]> = { ...seed };
+    Object.keys(next).forEach((key) => {
+      const index = Number(key);
+      if (!Number.isFinite(index)) return;
+      const events = next[index];
+      if (!Array.isArray(events) || events.length === 0) return;
+      if (eventsNeedScoreRefresh(events)) {
+        delete next[index];
+      }
+    });
     const start = clampIndex(centerIndex - CACHE_HYDRATE_WINDOW_DAYS);
     const end = clampIndex(centerIndex + CACHE_HYDRATE_WINDOW_DAYS);
     for (let i = start; i <= end; i++) {
@@ -271,14 +284,16 @@
   async function loadDay(index: number, force = false): Promise<void> {
     const safeIndex = clampIndex(index);
     if (dayLoading.has(safeIndex)) return;
-    if (!force && Array.isArray(dayEvents[safeIndex]) && dayEvents[safeIndex].length > 0) return;
+    const cachedEvents = dayEvents[safeIndex];
+    const cachedNeedsRefresh = Array.isArray(cachedEvents) && eventsNeedScoreRefresh(cachedEvents);
+    if (!force && Array.isArray(cachedEvents) && cachedEvents.length > 0 && !cachedNeedsRefresh) return;
 
     const requestSeq = ++loadRequestSeq;
     dayLoading.add(safeIndex);
     dayLoading = new Set(dayLoading);
     try {
       const date = getDateForIndex(safeIndex);
-      const merged = await fetchEventsForDate(date, force);
+      const merged = await fetchEventsForDate(date, force || cachedNeedsRefresh);
 
       const lastApplied = latestAppliedSeqByIndex.get(safeIndex) ?? 0;
       if (requestSeq < lastApplied) return;
@@ -334,6 +349,60 @@
     }
   }
 
+  function buildFullScheduleDateKeys(anchor: Date): string[] {
+    const keys = new Set<string>();
+    const startOffset = -DAY_RANGE_PAST - 2;
+    const endOffset = DAY_RANGE_FUTURE + 2;
+    for (let offset = startOffset; offset <= endOffset; offset++) {
+      keys.add(toScoreboardDateKey(addDays(anchor, offset)));
+    }
+    return Array.from(keys);
+  }
+
+  function shouldRunFullSchedulePrefetch(nowMs: number): boolean {
+    if (typeof localStorage === 'undefined') return false;
+    try {
+      const raw = localStorage.getItem(FULL_SCHEDULE_PREFETCH_KEY);
+      if (!raw) return true;
+      const parsed = JSON.parse(raw) as { ts?: number };
+      const ts = Number(parsed?.ts ?? 0);
+      if (!Number.isFinite(ts) || ts <= 0) return true;
+      return (nowMs - ts) > FULL_PREFETCH_TTL_MS;
+    } catch {
+      return true;
+    }
+  }
+
+  async function prefetchFullSchedule() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const now = Date.now();
+      if (!shouldRunFullSchedulePrefetch(now)) return;
+
+      const keys = buildFullScheduleDateKeys(baseDate);
+      for (let i = 0; i < keys.length; i += FULL_PREFETCH_CHUNK_SIZE) {
+        const chunk = keys.slice(i, i + FULL_PREFETCH_CHUNK_SIZE);
+        for (let j = 0; j < chunk.length; j += FULL_PREFETCH_CONCURRENCY) {
+          const slice = chunk.slice(j, j + FULL_PREFETCH_CONCURRENCY);
+          await nbaService.prewarmScoreboards(slice);
+        }
+        if (FULL_PREFETCH_CHUNK_PAUSE_MS > 0) {
+          await new Promise((resolve) => setTimeout(resolve, FULL_PREFETCH_CHUNK_PAUSE_MS));
+        }
+      }
+
+      localStorage.setItem(
+        FULL_SCHEDULE_PREFETCH_KEY,
+        JSON.stringify({
+          ts: now,
+          count: keys.length
+        })
+      );
+    } catch (error) {
+      console.warn('Failed to prefetch full schedule:', error);
+    }
+  }
+
   function saveSelectedDateForIndex(index: number) {
     try {
       const date = getDateForIndex(index);
@@ -370,7 +439,8 @@
     if (dayEvents[nextIndex]) {
       saveDayEventsForIndex(nextIndex, dayEvents[nextIndex]);
     }
-    const hasCachedEvents = Array.isArray(dayEvents[nextIndex]) && dayEvents[nextIndex].length > 0;
+    const cachedEvents = dayEvents[nextIndex];
+    const hasCachedEvents = Array.isArray(cachedEvents) && cachedEvents.length > 0;
     loadDay(nextIndex, !hasCachedEvents).catch(() => {});
     const direction: -1 | 1 = nextIndex > previousIndex ? 1 : -1;
     prefetchNeighbor(nextIndex, direction);
@@ -522,10 +592,13 @@
   function openGame(gameId: string) {
     if (interactionLocked()) return;
     const now = Date.now();
-    if (now - lastOpenAt < 120) return;
+    if (now - lastOpenAt < 80) return;
     lastOpenAt = now;
     ensureBoxscorePrewarmById(gameId);
-    goto(`/game/${gameId}`);
+    const route = `/game/${gameId}`;
+    preloadCode(route).catch(() => {});
+    preloadData(route).catch(() => {});
+    goto(route);
   }
 
   function handleSwipeDrag(deltaX: number) {
@@ -583,6 +656,9 @@
 
   function prewarmGameData(game: GameCardView) {
     ensureBoxscorePrewarmById(game.id);
+    const route = `/game/${game.id}`;
+    preloadCode(route).catch(() => {});
+    preloadData(route).catch(() => {});
   }
 
   function formatLocalTime(dateStr: string) {
@@ -617,6 +693,31 @@
     return event?.competitions?.[0]?.competitors?.find((c) => c.homeAway === side);
   }
 
+  function getStatusName(event: NBAEvent): string {
+    return event?.competitions?.[0]?.status?.type?.name ?? '';
+  }
+
+  function competitorHasScore(event: NBAEvent, side: 'home' | 'away'): boolean {
+    const score = getCompetitor(event, side)?.score;
+    if (score === null || score === undefined) return false;
+    return String(score).trim().length > 0;
+  }
+
+  function statusExpectsScores(statusName: string): boolean {
+    return statusName !== 'STATUS_SCHEDULED' && statusName !== 'STATUS_POSTPONED' && statusName !== 'STATUS_CANCELED';
+  }
+
+  function eventNeedsScoreRefresh(event: NBAEvent): boolean {
+    const statusName = getStatusName(event);
+    if (!statusExpectsScores(statusName)) return false;
+    return !competitorHasScore(event, 'away') || !competitorHasScore(event, 'home');
+  }
+
+  function eventsNeedScoreRefresh(events: NBAEvent[]): boolean {
+    if (!Array.isArray(events) || events.length === 0) return false;
+    return events.some((event) => eventNeedsScoreRefresh(event));
+  }
+
   function toGameCard(event: NBAEvent): GameCardView {
     const away = getCompetitor(event, 'away');
     const home = getCompetitor(event, 'home');
@@ -631,8 +732,6 @@
       event,
       awayAbbr,
       homeAbbr,
-      awayLogo: getTeamLogoPath(away?.team),
-      homeLogo: getTeamLogoPath(home?.team),
       awayScore: away?.score ?? 0,
       homeScore: home?.score ?? 0,
       statusText: scheduled ? formatLocalTime(event.date) : (event?.competitions?.[0]?.status?.type?.shortDetail ?? ''),
@@ -718,6 +817,9 @@
     setTimeout(() => {
       prefetchScheduleWindow().catch(() => {});
     }, 1200);
+    setTimeout(() => {
+      prefetchFullSchedule().catch(() => {});
+    }, 1800);
 
     interval = setInterval(() => {
       handleLocalDayRolloverIfNeeded();

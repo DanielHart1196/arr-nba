@@ -17,7 +17,13 @@
   let season = currentSeason;
   let error: string | null = data?.error ?? null;
   let seasons: string[] = buildSeasonList();
-  let historyPayload: { seasons: { season: string; players: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } } }[] } | null = null;
+  let historyPayload: {
+    seasons: {
+      season: string;
+      players?: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } };
+      teams?: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } };
+    }[];
+  } | null = null;
   let teamsData: { headers?: string[]; rows: any[] } = initialStats?.teams ?? { headers: [], rows: [] };
   let playerRows: any[] = [];
   let playerRowsRaw: any[] = [];
@@ -32,6 +38,8 @@
   let playerSearchOpen = false;
   let playerSearchInput: HTMLInputElement | null = null;
   const seasonLeadersCache = new Map<string, any>();
+  let loadSeasonSeq = 0;
+  let playerModalRequestSeq = 0;
   let menuOpen = false;
   let menuPanelEl: HTMLDivElement | null = null;
   let menuListenersActive = false;
@@ -77,6 +85,29 @@
     return list.filter((s) => s !== currentSeason);
   }
 
+  function rowsLen(block: { rows?: any[] } | undefined): number {
+    return Array.isArray(block?.rows) ? block.rows.length : 0;
+  }
+
+  function seasonHasUsableData(entry: any): boolean {
+    if (!entry) return false;
+    return (
+      rowsLen(entry?.players?.perGame) > 0 ||
+      rowsLen(entry?.players?.totals) > 0 ||
+      rowsLen(entry?.teams?.perGame) > 0 ||
+      rowsLen(entry?.teams?.totals) > 0
+    );
+  }
+
+  function availableHistorySeasons(payload: any): string[] {
+    const entries = Array.isArray(payload?.seasons) ? payload.seasons : [];
+    return entries
+      .filter((entry) => seasonHasUsableData(entry))
+      .map((entry) => String(entry?.season ?? ''))
+      .filter(Boolean)
+      .filter((s) => s !== currentSeason);
+  }
+
   function formatName(n: string): string {
     const parts = (n || '').split(' ').filter(Boolean);
     if (parts.length === 0) return n || '';
@@ -100,7 +131,19 @@
       if (upper.includes('RANK')) return false;
       if (upper.includes('FANTASY')) return false;
       if (upper.includes('PCT')) {
-        return upper === 'FG_PCT' || upper === 'FG3_PCT' || upper === 'FT_PCT';
+        return (
+          upper === 'FG_PCT' ||
+          upper === 'FG3_PCT' ||
+          upper === 'FT_PCT' ||
+          upper === 'TS_PCT' ||
+          upper === 'EFG_PCT' ||
+          upper === 'USG_PCT' ||
+          upper === 'AST_PCT' ||
+          upper === 'REB_PCT' ||
+          upper === 'OREB_PCT' ||
+          upper === 'DREB_PCT' ||
+          upper === 'TM_TOV_PCT'
+        );
       }
       if (upper === 'TEAM_COUNT') return false;
       if (upper === 'PLAYER_NAME' || upper === 'PLAYER_ID' || upper === 'TEAM_ABBREVIATION') return false;
@@ -119,6 +162,17 @@
     if (upper === 'FG_PCT') return 'FG';
     if (upper === 'FG3_PCT') return '3P';
     if (upper === 'FT_PCT') return 'FT';
+    if (upper === 'TS_PCT') return 'TS';
+    if (upper === 'EFG_PCT') return 'eFG';
+    if (upper === 'USG_PCT') return 'USG';
+    if (upper === 'AST_PCT') return 'AST%';
+    if (upper === 'REB_PCT') return 'REB%';
+    if (upper === 'OREB_PCT') return 'OREB%';
+    if (upper === 'DREB_PCT') return 'DREB%';
+    if (upper === 'TM_TOV_PCT') return 'TOV%';
+    if (upper === 'OFF_RATING') return 'ORtg';
+    if (upper === 'DEF_RATING') return 'DRtg';
+    if (upper === 'NET_RATING') return 'NRtg';
     if (upper === 'OREB') return 'OR';
     if (upper === 'DREB') return 'DR';
     if (upper === 'BLKA') return 'BA';
@@ -218,48 +272,61 @@
   }
 
   async function loadSeason(seasonKey: string): Promise<void> {
+    const requestSeq = ++loadSeasonSeq;
+    const requestedPerMode = perMode;
     season = seasonKey;
     error = null;
-    const apiCacheKey = `${seasonKey}:${perMode}`;
+    const apiCacheKey = `${seasonKey}:${requestedPerMode}`;
+    const canApply = () =>
+      requestSeq === loadSeasonSeq &&
+      season === seasonKey &&
+      perMode === requestedPerMode;
     if (seasonKey === currentSeason) {
       try {
         let json = seasonLeadersCache.get(apiCacheKey);
         if (!json) {
-          json = await getSeasonLeadersWithFallback(seasonKey, perMode);
+          json = await getSeasonLeadersWithFallback(seasonKey, requestedPerMode);
           seasonLeadersCache.set(apiCacheKey, json);
         }
+        if (!canApply()) return;
         applyPlayerData(json?.players ?? null);
         teamsData = json?.teams ?? { headers: [], rows: [] };
         applyTeamData(teamsData);
-        currentPlayersByMode[perMode] = json?.players ?? null;
+        currentPlayersByMode[requestedPerMode] = json?.players ?? null;
       } catch (e: any) {
+        if (!canApply()) return;
         error = e?.message ?? 'Failed to load season leaders';
       }
       return;
     }
+    await ensureHistoryPayload();
+    if (!canApply()) return;
     if (!historyPayload) {
-      try {
-        const res = await fetch('/season-history.json');
-        if (!res.ok) throw new Error(`Failed to load season history (${res.status})`);
-        historyPayload = await res.json();
-      } catch (e: any) {
-        error = e?.message ?? 'Failed to load season history';
-        return;
-      }
+      error = error ?? 'Failed to load season history';
+      return;
     }
     const entry = historyPayload?.seasons?.find((s) => String(s?.season ?? '') === seasonKey);
-    const playerBlock = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
+    const playerBlock = requestedPerMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
+    const teamBlock = requestedPerMode === 'Totals' ? entry?.teams?.totals : entry?.teams?.perGame;
     applyPlayerData(playerBlock ?? null);
+    if (teamBlock?.rows?.length) {
+      if (!canApply()) return;
+      teamsData = teamBlock;
+      applyTeamData(teamsData);
+      return;
+    }
 
     try {
       let json = seasonLeadersCache.get(apiCacheKey);
       if (!json) {
-        json = await getSeasonLeadersWithFallback(seasonKey, perMode);
+        json = await getSeasonLeadersWithFallback(seasonKey, requestedPerMode);
         seasonLeadersCache.set(apiCacheKey, json);
       }
+      if (!canApply()) return;
       teamsData = json?.teams ?? { headers: [], rows: [] };
       applyTeamData(teamsData);
     } catch (e: any) {
+      if (!canApply()) return;
       error = e?.message ?? 'Failed to load teams';
     }
   }
@@ -389,7 +456,7 @@
     return preferredHeadshotUrl(id);
   }
 
-  function buildHistoryRows(playerRow: any): { season: string; row: Record<string, any> | null }[] {
+  function buildHistoryRows(playerRow: any, modeForHistory: 'PerGame' | 'Totals'): { season: string; row: Record<string, any> | null }[] {
     const playerId = String(playerRow?.PLAYER_ID ?? '');
     const playerNameValue = playerName(playerRow);
     const needle = normalizeName(playerNameValue);
@@ -397,7 +464,7 @@
     const entries = historyPayload?.seasons ?? [];
     for (const entry of entries) {
       const seasonKey = String(entry?.season ?? '');
-      const seasonBlock = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
+      const seasonBlock = modeForHistory === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
       const seasonRows = seasonBlock?.rows ?? [];
       const byId = playerId ? seasonRows.find((r: any) => String(r.PLAYER_ID ?? '') === playerId) : null;
       let row = byId ?? null;
@@ -417,11 +484,9 @@
       const res = await fetch(HISTORY_URL);
       if (!res.ok) throw new Error(`Failed to load season history (${res.status})`);
       historyPayload = await res.json();
-      const fileSeasons = Array.isArray(historyPayload?.seasons)
-        ? historyPayload.seasons.map((s: any) => String(s?.season ?? '')).filter(Boolean)
-        : [];
+      const fileSeasons = availableHistorySeasons(historyPayload);
       if (fileSeasons.length > 0) {
-        seasons = fileSeasons.filter((s) => s !== currentSeason);
+        seasons = fileSeasons;
       }
     } catch (e: any) {
       error = e?.message ?? 'Failed to load season history';
@@ -434,11 +499,9 @@
       const res = await fetch(HISTORY_URL);
       if (!res.ok) return;
       historyPayload = await res.json();
-      const fileSeasons = Array.isArray(historyPayload?.seasons)
-        ? historyPayload.seasons.map((s: any) => String(s?.season ?? '')).filter(Boolean)
-        : [];
+      const fileSeasons = availableHistorySeasons(historyPayload);
       if (fileSeasons.length > 0) {
-        seasons = fileSeasons.filter((s) => s !== currentSeason);
+        seasons = fileSeasons;
       }
     } catch {
       // ignore prefetch failures for dropdown
@@ -457,11 +520,11 @@
     removeMenuOutsideListeners();
   }
 
-  async function ensureCurrentPlayers(): Promise<void> {
-    if (currentPlayersByMode[perMode]) return;
+  async function ensureCurrentPlayers(modeForCurrent: 'PerGame' | 'Totals'): Promise<void> {
+    if (currentPlayersByMode[modeForCurrent]) return;
     try {
-      const json = await getSeasonLeadersWithFallback(currentSeason, perMode);
-      currentPlayersByMode[perMode] = json?.players ?? null;
+      const json = await getSeasonLeadersWithFallback(currentSeason, modeForCurrent);
+      currentPlayersByMode[modeForCurrent] = json?.players ?? null;
     } catch {
       // ignore; history will just omit current season
     }
@@ -469,44 +532,66 @@
 
   async function openPlayerModal(row: any): Promise<void> {
     if (!row) return;
-    await ensureHistoryPayload();
-    if (season !== currentSeason) {
-      await ensureCurrentPlayers();
-    }
+    const requestSeq = ++playerModalRequestSeq;
+    const canApply = () => requestSeq === playerModalRequestSeq;
+    const seasonAtOpen = season;
+    const modeAtOpen = perMode;
     const playerId = row?.PLAYER_ID ? String(row.PLAYER_ID) : '';
     const name = playerName(row);
+    const team = teamAbbr(row);
     const player = {
       id: playerId,
       name,
       position: row?.PLAYER_POSITION ?? row?.POSITION ?? '',
-      jersey: row?.JERSEY ?? ''
+      jersey: row?.JERSEY ?? '',
+      teamAbbr: team
     };
     openSeasonStatsModal(player as any);
-    const history = buildHistoryRows(row);
-    let historyRows = history;
-    if (season !== currentSeason && currentPlayersByMode[perMode]) {
-      const currentRows = currentPlayersByMode[perMode]?.rows ?? [];
-      const byId = playerId ? currentRows.find((r: any) => String(r.PLAYER_ID ?? '') === playerId) : null;
-      let currentRow = byId ?? null;
-      if (!currentRow && name) {
-        const needle = normalizeName(name);
-        currentRow = currentRows.find((r: any) => normalizeName(String(r.PLAYER_NAME ?? '')) === needle) ?? null;
-      }
-      if (currentRow) {
-        historyRows = [{ season: currentSeason, row: currentRow }, ...history];
-      }
-    }
-
     updateSeasonStatsModal({
       headshot: row?.HEADSHOT_URL ?? espnHeadshotUrl(playerId),
       row,
       headers: playerColumns,
-      historyLoading: false,
+      historyLoading: true,
       historyError: '',
-      historyRows,
-      seasonLabel: season.replace('-', '/'),
-      team: teamAbbr(row)
+      historyRows: [],
+      seasonLabel: seasonAtOpen.replace('-', '/'),
+      team
     });
+
+    try {
+      await ensureHistoryPayload();
+      if (seasonAtOpen !== currentSeason) {
+        await ensureCurrentPlayers(modeAtOpen);
+      }
+      if (!canApply()) return;
+
+      const history = buildHistoryRows(row, modeAtOpen);
+      let historyRows = history;
+      if (seasonAtOpen !== currentSeason && currentPlayersByMode[modeAtOpen]) {
+        const currentRows = currentPlayersByMode[modeAtOpen]?.rows ?? [];
+        const byId = playerId ? currentRows.find((r: any) => String(r.PLAYER_ID ?? '') === playerId) : null;
+        let currentRow = byId ?? null;
+        if (!currentRow && name) {
+          const needle = normalizeName(name);
+          currentRow = currentRows.find((r: any) => normalizeName(String(r.PLAYER_NAME ?? '')) === needle) ?? null;
+        }
+        if (currentRow) {
+          historyRows = [{ season: currentSeason, row: currentRow }, ...history];
+        }
+      }
+
+      updateSeasonStatsModal({
+        historyLoading: false,
+        historyError: '',
+        historyRows
+      });
+    } catch (e: any) {
+      if (!canApply()) return;
+      updateSeasonStatsModal({
+        historyLoading: false,
+        historyError: e?.message ?? 'Failed to load season history'
+      });
+    }
   }
 
   applyPlayerData(initialStats?.players ?? null);

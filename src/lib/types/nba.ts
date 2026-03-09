@@ -54,6 +54,7 @@ export interface Player {
   jersey?: string;
   position?: string;
   headshot?: string;
+  teamAbbr?: string;
 }
 
 export interface PlayByPlayEntry {

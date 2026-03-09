@@ -6,6 +6,7 @@ export type PlayerStatRow = {
   jersey?: string;
   position?: string;
   headshot?: string;
+  teamAbbr?: string;
 };
 
 export function parseMakesAttempts(input: string) {
@@ -43,17 +44,25 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
   const nameOrder = ['MIN','PTS','FG','3PT','FT','REB','AST','TO','STL','BLK','OREB','DREB','PF','+/-'];
   const comp = scoreboardEvent?.competitions?.[0];
   const idToSide = new Map<string, 'home' | 'away'>();
+  const idToAbbr = new Map<string, string>();
   const competitors = comp?.competitors ?? [];
   for (const c of competitors) {
     const tid = String(c?.team?.id ?? '');
     const hv = c?.homeAway === 'home' ? 'home' : 'away';
     if (tid) idToSide.set(tid, hv);
+    const abbr = String(c?.team?.abbreviation ?? c?.team?.shortDisplayName ?? '').trim();
+    if (tid && abbr) idToAbbr.set(tid, abbr);
   }
   const finalPlayers: Record<'home' | 'away', PlayerStatRow[]> = { home: [], away: [] };
   
   competitions.forEach((team: any, index: number) => {
     const teamId = String(team?.team?.id ?? '');
-    const teamDisplayName = team?.team?.displayName ?? 'Unknown';
+    const teamAbbr = String(
+      idToAbbr.get(teamId) ??
+      team?.team?.abbreviation ??
+      team?.team?.shortDisplayName ??
+      ''
+    ).trim().toUpperCase();
     let side: 'home' | 'away';
     if (idToSide.has(teamId)) {
       side = idToSide.get(teamId)!;
@@ -109,7 +118,8 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
         id: athleteId,
         jersey,
         position: position ? String(position) : undefined,
-        headshot
+        headshot,
+        teamAbbr: teamAbbr || undefined
       });
     }
     

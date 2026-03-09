@@ -320,6 +320,12 @@ export class RedditService {
     const cacheKey = `reddit:subthread:${sub}:${request.type}:${createPairKey(request.awayCandidates?.[0] ?? '', request.homeCandidates?.[0] ?? '')}:${request.eventDate ?? ''}`;
     const cached = this.cache.get<RedditSearchResponse>(cacheKey);
     if (cached && !(cached instanceof Promise)) return cached;
+    const browserTtlMs = request.type === 'post' ? 15 * 60 * 1000 : 6 * 60 * 1000;
+    const browserCached = this.readBrowserCache<RedditSearchResponse>(cacheKey, browserTtlMs);
+    if (browserCached) {
+      this.cache.set(cacheKey, browserCached, request.type === 'post' ? 120000 : 30000);
+      return browserCached;
+    }
 
     try {
       const eventTs = request.eventDate ? new Date(request.eventDate).getTime() : NaN;
@@ -329,86 +335,47 @@ export class RedditService {
         ? (request.type === 'post' ? 'year' : 'month')
         : (eventAgeDays > 45 ? 'year' : (eventAgeDays > 7 ? 'month' : 'week'));
       const sort: 'new' | 'relevance' = request.type === 'post' ? 'relevance' : 'new';
-      const query = this.buildSearchQuery(request);
+      const queries = Array.from(new Set([this.buildSearchQuery(request), this.buildRelaxedSearchQuery(request)].filter(Boolean)));
+      for (const query of queries) {
+        let searchJson: any;
+        try {
+          searchJson = await this.dataSource.searchSubredditRaw(sub, query, timeRange, sort);
+        } catch (e: any) {
+          if (e.message.includes('403') || e.message.includes('429')) {
+            console.warn('Subreddit search blocked, falling back to feed-based search');
+            searchJson = null;
+          } else {
+            throw e;
+          }
+        }
+        if (!searchJson) continue;
 
-      let searchJson: any;
-      try {
-        searchJson = await this.dataSource.searchSubredditRaw(sub, query, timeRange, sort);
-      } catch (e: any) {
-        if (e.message.includes('403') || e.message.includes('429')) {
-          console.warn('Subreddit search blocked, falling back to feed-based search');
-          searchJson = null;
-        } else {
-          throw e;
+        const result = this.transformSearchWithRelaxedPostWindow(searchJson, request);
+        if (result?.post) {
+          this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
+          this.writeBrowserCache(cacheKey, result);
+          return result;
         }
       }
 
-      if (searchJson) {
-        let result = this.transformer.transformSearch(
-          searchJson,
-          request.type,
-          request.eventDate,
-          request.awayCandidates,
-          request.homeCandidates,
-          request.window
-        );
-
-        if (!result?.post && request.type === 'post' && request.eventDate) {
-        result = this.transformer.transformSearch(
-          searchJson,
-          request.type,
-          request.eventDate,
-          request.awayCandidates,
-          request.homeCandidates,
-          { ...request.window, post: [-1 * 3600, 18 * 3600] }
-        );
-      }
-
-        this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
-        return result;
-      }
-
-      const [newFeed, hotFeed] = await Promise.all([
+      const [newFeed, hotFeed, topWeekFeed, topMonthFeed] = await Promise.all([
         this.dataSource.getSubredditFeed(sub, 'new'),
-        this.dataSource.getSubredditFeed(sub, 'hot')
+        this.dataSource.getSubredditFeed(sub, 'hot'),
+        this.dataSource.getSubredditFeed(sub, 'top', 'week'),
+        this.dataSource.getSubredditFeed(sub, 'top', 'month')
       ]);
 
-      const allPosts = [
+      const uniquePosts = this.uniquePosts([
         ...(newFeed?.data?.children ?? []),
-        ...(hotFeed?.data?.children ?? [])
-      ];
-
-      const seen = new Set<string>();
-      const uniquePosts = allPosts.filter((post: any) => {
-        const id = String(post?.data?.id ?? '');
-        if (!id || seen.has(id)) return false;
-        seen.add(id);
-        return true;
-      });
+        ...(hotFeed?.data?.children ?? []),
+        ...(topWeekFeed?.data?.children ?? []),
+        ...(topMonthFeed?.data?.children ?? [])
+      ]);
 
       const wrappedJson = { data: { children: uniquePosts } };
-      let result = this.transformer.transformSearch(
-        wrappedJson,
-        request.type,
-        request.eventDate,
-        request.awayCandidates,
-        request.homeCandidates,
-        request.window
-      );
-
-      if (!result?.post && request.type === 'post' && request.eventDate) {
-        // Team subs often post PGTs earlier than 2 hours after tip; relax window if strict search fails.
-        result = this.transformer.transformSearch(
-          wrappedJson,
-          request.type,
-          request.eventDate,
-          request.awayCandidates,
-          request.homeCandidates,
-          { ...request.window, post: [-1 * 3600, 18 * 3600] }
-        );
-      }
-
+      const result = this.transformSearchWithRelaxedPostWindow(wrappedJson, request);
       this.cache.set(cacheKey, result, request.type === 'post' ? 120000 : 30000);
+      this.writeBrowserCache(cacheKey, result);
       return result;
     } catch (error) {
       console.error(`Subreddit thread search failed for r/${sub}:`, error);
@@ -416,26 +383,62 @@ export class RedditService {
     }
   }
 
+  private transformSearchWithRelaxedPostWindow(json: any, request: RedditSearchRequest): RedditSearchResponse {
+    let result = this.transformer.transformSearch(
+      json,
+      request.type,
+      request.eventDate,
+      request.awayCandidates,
+      request.homeCandidates,
+      request.window
+    );
+
+    if (!result?.post && request.type === 'post' && request.eventDate) {
+      result = this.transformer.transformSearch(
+        json,
+        request.type,
+        request.eventDate,
+        request.awayCandidates,
+        request.homeCandidates,
+        { ...request.window, post: [-1 * 3600, 18 * 3600] }
+      );
+    }
+    return result;
+  }
+
+  private uniquePosts(posts: any[]): any[] {
+    const seen = new Set<string>();
+    return posts.filter((post: any) => {
+      const id = String(post?.data?.id ?? '');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  private buildRelaxedSearchQuery(request: RedditSearchRequest): string {
+    const base = request.type === 'post' ? 'post game thread' : 'game thread';
+    const away = expandTeamNames(request.awayCandidates ?? []).join(' ');
+    const home = expandTeamNames(request.homeCandidates ?? []).join(' ');
+    return `${base} ${away} ${home}`.trim();
+  }
+
   private async fallbackSearchFromFeed(request: RedditSearchRequest): Promise<RedditSearchResponse> {
     try {
-      // Fetch both 'new' and 'hot' to increase chances of finding it
-      const [newFeed, hotFeed] = await Promise.all([
+      // Fetch broader feed windows to increase thread hit rate.
+      const [newFeed, hotFeed, topWeekFeed, topMonthFeed] = await Promise.all([
         this.dataSource.getSubredditFeed('nba', 'new'),
-        this.dataSource.getSubredditFeed('nba', 'hot')
+        this.dataSource.getSubredditFeed('nba', 'hot'),
+        this.dataSource.getSubredditFeed('nba', 'top', 'week'),
+        this.dataSource.getSubredditFeed('nba', 'top', 'month')
       ]);
 
-      const allPosts = [
+      const uniquePosts = this.uniquePosts([
         ...(newFeed?.data?.children ?? []),
-        ...(hotFeed?.data?.children ?? [])
-      ];
-
-      // Deduplicate by ID
-      const seen = new Set();
-      const uniquePosts = allPosts.filter((p: any) => {
-        if (seen.has(p.data.id)) return false;
-        seen.add(p.data.id);
-        return true;
-      });
+        ...(hotFeed?.data?.children ?? []),
+        ...(topWeekFeed?.data?.children ?? []),
+        ...(topMonthFeed?.data?.children ?? [])
+      ]);
 
       // Wrap in a structure that transformer expects
       const wrappedJson = { data: { children: uniquePosts } };

@@ -111,8 +111,14 @@ export class RedditDataSource implements IRedditDataSource {
     return this.fetchRedditServer(url, 'Reddit Thread Content');
   }
 
-  async getSubredditFeed(subreddit: string, sort: 'new' | 'hot' = 'new'): Promise<any> {
-    const url = `https://www.reddit.com/r/${subreddit}/${sort}.json?limit=100`;
+  async getSubredditFeed(
+    subreddit: string,
+    sort: 'new' | 'hot' | 'top' = 'new',
+    timeRange: 'day' | 'week' | 'month' | 'year' | 'all' = 'week'
+  ): Promise<any> {
+    const params = new URLSearchParams({ limit: '100' });
+    if (sort === 'top') params.set('t', timeRange);
+    const url = `https://www.reddit.com/r/${subreddit}/${sort}.json?${params.toString()}`;
     if (this.isBrowser()) return this.fetchRedditBrowserFirst(url, 'Reddit Subreddit Feed');
     return this.fetchRedditServer(url, 'Reddit Subreddit Feed');
   }

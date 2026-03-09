@@ -6,10 +6,12 @@ const path = require('path');
 const OUT_PATH = path.join(__dirname, '..', 'static', 'season-history.json');
 const START_YEAR = 2024; // will walk down until stop condition
 const MIN_YEAR = 1946;
-const PER_MODE = 'PerGame';
 const MEASURE_TYPE = 'Base';
 const CONSECUTIVE_EMPTY_LIMIT = 3;
 const REQUEST_DELAY_MS = 900;
+const PER_MODES = ['PerGame', 'Totals'];
+const FETCH_RETRIES = 3;
+const RETRY_DELAY_MS = 1200;
 
 function seasonKey(startYear) {
   const end = String(startYear + 1).slice(-2);
@@ -44,7 +46,7 @@ function buildDashParams(url, season, measureType) {
   url.searchParams.set('Outcome', '');
   url.searchParams.set('PORound', '0');
   url.searchParams.set('PaceAdjust', 'N');
-  url.searchParams.set('PerMode', PER_MODE);
+  url.searchParams.set('PerMode', 'PerGame');
   url.searchParams.set('Period', '0');
   url.searchParams.set('PlusMinus', 'N');
   url.searchParams.set('Rank', 'N');
@@ -73,17 +75,67 @@ function mapResult(payload) {
   return { headers, rows: mappedRows };
 }
 
+function hasModeBlock(entry, rootKey, modeKey) {
+  const block = entry?.[rootKey]?.[modeKey];
+  return Array.isArray(block?.headers) && Array.isArray(block?.rows);
+}
+
+function hasCompleteSeasonData(entry) {
+  if (!entry) return false;
+  return (
+    hasModeBlock(entry, 'players', 'perGame') &&
+    hasModeBlock(entry, 'players', 'totals') &&
+    hasModeBlock(entry, 'teams', 'perGame') &&
+    hasModeBlock(entry, 'teams', 'totals')
+  );
+}
+
 async function fetchSeason(season) {
   const headers = buildHeaders();
-  const playerUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
-  buildDashParams(playerUrl, season, MEASURE_TYPE);
-  playerUrl.searchParams.set('StarterBench', '');
+  const players = {};
+  const teams = {};
 
-  const res = await fetch(playerUrl.toString(), { headers });
-  if (!res.ok) throw new Error(`NBA player stats error: ${res.status}`);
-  const json = await res.json();
-  const players = mapResult(json);
-  return { season, players };
+  for (const perMode of PER_MODES) {
+    const playerUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
+    buildDashParams(playerUrl, season, MEASURE_TYPE);
+    playerUrl.searchParams.set('PerMode', perMode);
+    playerUrl.searchParams.set('StarterBench', '');
+
+    const teamUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
+    buildDashParams(teamUrl, season, MEASURE_TYPE);
+    teamUrl.searchParams.set('PerMode', perMode);
+
+    const [playerRes, teamRes] = await Promise.all([
+      fetch(playerUrl.toString(), { headers }),
+      fetch(teamUrl.toString(), { headers })
+    ]);
+
+    if (!playerRes.ok) throw new Error(`NBA player stats error (${perMode}): ${playerRes.status}`);
+    if (!teamRes.ok) throw new Error(`NBA team stats error (${perMode}): ${teamRes.status}`);
+
+    const playerJson = await playerRes.json();
+    const teamJson = await teamRes.json();
+    const key = perMode === 'Totals' ? 'totals' : 'perGame';
+    players[key] = mapResult(playerJson);
+    teams[key] = mapResult(teamJson);
+  }
+
+  return { season, players, teams };
+}
+
+async function fetchSeasonWithRetry(season) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= FETCH_RETRIES; attempt += 1) {
+    try {
+      return await fetchSeason(season);
+    } catch (err) {
+      lastError = err;
+      if (attempt < FETCH_RETRIES) {
+        await sleep(RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+  throw lastError || new Error('unknown fetch error');
 }
 
 async function main() {
@@ -101,15 +153,16 @@ async function main() {
   let emptyCount = 0;
   for (let y = START_YEAR; y >= MIN_YEAR; y--) {
     const key = seasonKey(y);
-    if (existingBySeason.has(key)) {
-      results.push(existingBySeason.get(key));
+    const existing = existingBySeason.get(key);
+    if (hasCompleteSeasonData(existing)) {
+      results.push(existing);
       continue;
     }
 
     process.stdout.write(`Fetching ${key}... `);
     try {
-      const data = await fetchSeason(key);
-      const rows = data.players?.rows ?? [];
+      const data = await fetchSeasonWithRetry(key);
+      const rows = data.players?.perGame?.rows ?? [];
       if (!rows.length) {
         emptyCount += 1;
         console.log('empty');
@@ -117,11 +170,20 @@ async function main() {
         emptyCount = 0;
         console.log(`ok (${rows.length})`);
       }
-      results.push({ season: key, players: data.players });
+      results.push({ season: key, players: data.players, teams: data.teams });
     } catch (err) {
       emptyCount += 1;
       console.log(`error (${err.message})`);
-      results.push({ season: key, players: { headers: [], rows: [] } });
+      if (existing) {
+        results.push(existing);
+      } else {
+        const emptyBlock = { headers: [], rows: [] };
+        results.push({
+          season: key,
+          players: { perGame: emptyBlock, totals: emptyBlock },
+          teams: { perGame: emptyBlock, totals: emptyBlock }
+        });
+      }
     }
 
     if (emptyCount >= CONSECUTIVE_EMPTY_LIMIT) {
@@ -133,8 +195,8 @@ async function main() {
   }
 
   // Merge and sort seasons desc
-  const merged = new Map(results.map((s) => [s.season, s]));
-  for (const s of seasons) merged.set(s.season, s);
+  const merged = new Map(seasons.map((s) => [s.season, s]));
+  for (const s of results) merged.set(s.season, s);
 
   const final = Array.from(merged.values()).sort((a, b) => (a.season < b.season ? 1 : -1));
   fs.writeFileSync(OUT_PATH, JSON.stringify({ seasons: final }));

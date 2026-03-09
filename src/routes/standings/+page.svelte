@@ -3,12 +3,11 @@
   import { goto } from '$app/navigation';
   import { nbaService } from '$lib/services/nba.service';
   import TeamLogo from '$lib/components/TeamLogo.svelte';
-  import { getTeamLogoAbbr, getTeamLogoPath } from '$lib/utils/team.utils';
+  import { getTeamLogoAbbr } from '$lib/utils/team.utils';
 
   type Row = {
     position: number;
     team: string;
-    logo: string;
     abbr: string;
     wl: string;
     pct: string;
@@ -62,14 +61,12 @@
           const teamObj = entry?.team ?? {};
           const team = teamObj?.displayName ?? teamObj?.shortDisplayName ?? teamObj?.abbreviation ?? 'Team';
           const abbr = getTeamLogoAbbr(teamObj);
-          const logo = getTeamLogoPath(teamObj);
           const wins = stats.wins ?? stats.W ?? '-';
           const losses = stats.losses ?? stats.L ?? '-';
           const wl = wins !== '-' && losses !== '-' ? `${wins}-${losses}` : '-';
           return {
             position: 0,
             team,
-            logo,
             abbr,
             wl,
             pct: stats.winPercent ?? stats.PCT ?? '-',

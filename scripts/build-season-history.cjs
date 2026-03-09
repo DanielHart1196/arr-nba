@@ -89,11 +89,18 @@ async function fetchSeason(season, perMode) {
   buildDashParams(playerUrl, season, 'Base');
   playerUrl.searchParams.set('PerMode', perMode);
   playerUrl.searchParams.set('StarterBench', '');
+  const teamUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
+  buildDashParams(teamUrl, season, 'Base');
+  teamUrl.searchParams.set('PerMode', perMode);
 
-  const res = await fetch(playerUrl.toString(), { headers });
-  if (!res.ok) throw new Error(`NBA player stats error: ${res.status}`);
-  const json = await res.json();
-  return { season, players: mapResult(json) };
+  const [playerRes, teamRes] = await Promise.all([
+    fetch(playerUrl.toString(), { headers }),
+    fetch(teamUrl.toString(), { headers })
+  ]);
+  if (!playerRes.ok) throw new Error(`NBA player stats error: ${playerRes.status}`);
+  if (!teamRes.ok) throw new Error(`NBA team stats error: ${teamRes.status}`);
+  const [playerJson, teamJson] = await Promise.all([playerRes.json(), teamRes.json()]);
+  return { season, players: mapResult(playerJson), teams: mapResult(teamJson) };
 }
 
 async function main() {
@@ -111,6 +118,10 @@ async function main() {
       players: {
         perGame: perGame.players,
         totals: totals.players
+      },
+      teams: {
+        perGame: perGame.teams,
+        totals: totals.teams
       }
     });
     process.stdout.write('ok\n');

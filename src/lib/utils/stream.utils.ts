@@ -6,6 +6,12 @@ export type ResolvedStream = {
   mode: 'video' | 'embed' | 'external';
 };
 
+export type StreamLookupOptions = {
+  awayAbbr?: string;
+  homeAbbr?: string;
+  eventId?: string;
+};
+
 export const STREAM_FALLBACK: ResolvedStream = {
   label: 'Stream (Fallback)',
   url: 'https://sharkstreams.net/category/nba',
@@ -61,7 +67,8 @@ function toPlayableHlsUrl(hlsUrl: string): string {
 
 export async function findSharkStreamByTeams(
   awayDisplayName: string,
-  homeDisplayName: string
+  homeDisplayName: string,
+  options?: StreamLookupOptions
 ): Promise<ResolvedStream | null> {
   if (!awayDisplayName || !homeDisplayName) return null;
 
@@ -73,7 +80,12 @@ export async function findSharkStreamByTeams(
     const apiUrl =
       `${resolveApiUrl('/api/streams/shark')}` +
       `?away=${encodeURIComponent(awayNeedle)}` +
-      `&home=${encodeURIComponent(homeNeedle)}`;
+      `&home=${encodeURIComponent(homeNeedle)}` +
+      `&awayName=${encodeURIComponent(awayDisplayName)}` +
+      `&homeName=${encodeURIComponent(homeDisplayName)}` +
+      `&awayAbbr=${encodeURIComponent(options?.awayAbbr ?? '')}` +
+      `&homeAbbr=${encodeURIComponent(options?.homeAbbr ?? '')}` +
+      `&eventId=${encodeURIComponent(options?.eventId ?? '')}`;
     const lookup = await fetchSharkLookup(apiUrl);
     const playerUrl = typeof lookup?.playerUrl === 'string' ? lookup.playerUrl : '';
     const hlsUrl = typeof lookup?.hlsUrl === 'string' ? lookup.hlsUrl : '';

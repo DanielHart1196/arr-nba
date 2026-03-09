@@ -48,6 +48,71 @@ function mapResult(payload: any): { headers: string[]; rows: any[] } {
   return { headers, rows: mappedRows };
 }
 
+const PLAYER_ADVANCED_FIELDS = [
+  'TS_PCT',
+  'EFG_PCT',
+  'USG_PCT',
+  'AST_PCT',
+  'REB_PCT',
+  'OREB_PCT',
+  'DREB_PCT',
+  'AST_TO',
+  'NET_RATING',
+  'OFF_RATING',
+  'DEF_RATING',
+  'PIE'
+];
+
+const TEAM_ADVANCED_FIELDS = [
+  'TS_PCT',
+  'EFG_PCT',
+  'AST_PCT',
+  'REB_PCT',
+  'OREB_PCT',
+  'DREB_PCT',
+  'AST_TO',
+  'NET_RATING',
+  'OFF_RATING',
+  'DEF_RATING',
+  'PACE',
+  'PIE'
+];
+
+function mergeAdvancedBlock(
+  base: { headers: string[]; rows: any[] },
+  advanced: { headers: string[]; rows: any[] },
+  idKey: string,
+  fields: string[]
+): { headers: string[]; rows: any[] } {
+  const keepFields = fields.filter((key) => advanced.headers.includes(key));
+  if (keepFields.length === 0) return base;
+
+  const advById = new Map<string, any>();
+  for (const row of advanced.rows) {
+    const id = String(row?.[idKey] ?? '');
+    if (!id) continue;
+    advById.set(id, row);
+  }
+
+  const mergedRows = base.rows.map((row) => {
+    const id = String(row?.[idKey] ?? '');
+    const adv = id ? advById.get(id) : null;
+    if (!adv) return row;
+    const out = { ...row };
+    for (const key of keepFields) {
+      if (adv[key] !== undefined) out[key] = adv[key];
+    }
+    return out;
+  });
+
+  const mergedHeaders = [...base.headers];
+  for (const key of keepFields) {
+    if (!mergedHeaders.includes(key)) mergedHeaders.push(key);
+  }
+
+  return { headers: mergedHeaders, rows: mergedRows };
+}
+
 function buildDashParams(url: URL, season: string, measureType: 'Base' | 'Advanced'): void {
   url.searchParams.set('DateFrom', '');
   url.searchParams.set('DateTo', '');
@@ -109,52 +174,98 @@ export const GET = async ({ url }: any) => {
       cacheKey,
       async () => {
         const headers = buildHeaders();
-        const playerUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
-        buildDashParams(playerUrl, season, 'Base');
-        playerUrl.searchParams.set('PerMode', perMode);
-        playerUrl.searchParams.set('StarterBench', '');
+        const playerBaseUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
+        buildDashParams(playerBaseUrl, season, 'Base');
+        playerBaseUrl.searchParams.set('PerMode', perMode);
+        playerBaseUrl.searchParams.set('StarterBench', '');
 
-        const teamUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
-        buildDashParams(teamUrl, season, 'Base');
-        teamUrl.searchParams.set('PerMode', perMode);
+        const teamBaseUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
+        buildDashParams(teamBaseUrl, season, 'Base');
+        teamBaseUrl.searchParams.set('PerMode', perMode);
+
+        const playerAdvancedUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
+        buildDashParams(playerAdvancedUrl, season, 'Advanced');
+        playerAdvancedUrl.searchParams.set('PerMode', perMode);
+        playerAdvancedUrl.searchParams.set('StarterBench', '');
+
+        const teamAdvancedUrl = new URL('https://stats.nba.com/stats/leaguedashteamstats');
+        buildDashParams(teamAdvancedUrl, season, 'Advanced');
+        teamAdvancedUrl.searchParams.set('PerMode', perMode);
 
         const startedAt = Date.now();
-        const [playerRes, teamRes] = await Promise.all([
-          fetchWithTimeout(playerUrl.toString(), { headers }, timeoutMs, 'player'),
-          fetchWithTimeout(teamUrl.toString(), { headers }, timeoutMs, 'team')
+        const [playerBaseRes, teamBaseRes, playerAdvancedRes, teamAdvancedRes] = await Promise.all([
+          fetchWithTimeout(playerBaseUrl.toString(), { headers }, timeoutMs, 'player-base'),
+          fetchWithTimeout(teamBaseUrl.toString(), { headers }, timeoutMs, 'team-base'),
+          fetchWithTimeout(playerAdvancedUrl.toString(), { headers }, timeoutMs, 'player-advanced'),
+          fetchWithTimeout(teamAdvancedUrl.toString(), { headers }, timeoutMs, 'team-advanced')
         ]);
         const durationMs = Date.now() - startedAt;
 
-        if (!playerRes.ok) {
-          const body = await playerRes.text().catch(() => '');
-          const error = new Error(`NBA player stats error: ${playerRes.status}`);
+        if (!playerBaseRes.ok) {
+          const body = await playerBaseRes.text().catch(() => '');
+          const error = new Error(`NBA player stats error: ${playerBaseRes.status}`);
           (error as any).diagnostics = {
             durationMs,
-            playerStatus: playerRes.status,
-            playerStatusText: playerRes.statusText,
-            playerCfRay: playerRes.headers.get('cf-ray'),
-            playerServer: playerRes.headers.get('server'),
+            playerStatus: playerBaseRes.status,
+            playerStatusText: playerBaseRes.statusText,
+            playerCfRay: playerBaseRes.headers.get('cf-ray'),
+            playerServer: playerBaseRes.headers.get('server'),
             playerBodySample: body.slice(0, 400)
           };
           throw error;
         }
-        if (!teamRes.ok) {
-          const body = await teamRes.text().catch(() => '');
-          const error = new Error(`NBA team stats error: ${teamRes.status}`);
+        if (!teamBaseRes.ok) {
+          const body = await teamBaseRes.text().catch(() => '');
+          const error = new Error(`NBA team stats error: ${teamBaseRes.status}`);
           (error as any).diagnostics = {
             durationMs,
-            teamStatus: teamRes.status,
-            teamStatusText: teamRes.statusText,
-            teamCfRay: teamRes.headers.get('cf-ray'),
-            teamServer: teamRes.headers.get('server'),
+            teamStatus: teamBaseRes.status,
+            teamStatusText: teamBaseRes.statusText,
+            teamCfRay: teamBaseRes.headers.get('cf-ray'),
+            teamServer: teamBaseRes.headers.get('server'),
             teamBodySample: body.slice(0, 400)
           };
           throw error;
         }
+        if (!playerAdvancedRes.ok) {
+          const body = await playerAdvancedRes.text().catch(() => '');
+          const error = new Error(`NBA player advanced stats error: ${playerAdvancedRes.status}`);
+          (error as any).diagnostics = {
+            durationMs,
+            playerAdvancedStatus: playerAdvancedRes.status,
+            playerAdvancedStatusText: playerAdvancedRes.statusText,
+            playerAdvancedCfRay: playerAdvancedRes.headers.get('cf-ray'),
+            playerAdvancedServer: playerAdvancedRes.headers.get('server'),
+            playerAdvancedBodySample: body.slice(0, 400)
+          };
+          throw error;
+        }
+        if (!teamAdvancedRes.ok) {
+          const body = await teamAdvancedRes.text().catch(() => '');
+          const error = new Error(`NBA team advanced stats error: ${teamAdvancedRes.status}`);
+          (error as any).diagnostics = {
+            durationMs,
+            teamAdvancedStatus: teamAdvancedRes.status,
+            teamAdvancedStatusText: teamAdvancedRes.statusText,
+            teamAdvancedCfRay: teamAdvancedRes.headers.get('cf-ray'),
+            teamAdvancedServer: teamAdvancedRes.headers.get('server'),
+            teamAdvancedBodySample: body.slice(0, 400)
+          };
+          throw error;
+        }
 
-        const [playerJson, teamJson] = await Promise.all([playerRes.json(), teamRes.json()]);
-        const players = mapResult(playerJson);
-        const teams = mapResult(teamJson);
+        const [playerBaseJson, teamBaseJson, playerAdvancedJson, teamAdvancedJson] = await Promise.all([
+          playerBaseRes.json(),
+          teamBaseRes.json(),
+          playerAdvancedRes.json(),
+          teamAdvancedRes.json()
+        ]);
+        const playerBase = mapResult(playerBaseJson);
+        const teamBase = mapResult(teamBaseJson);
+        const playerAdvanced = mapResult(playerAdvancedJson);
+        const teamAdvanced = mapResult(teamAdvancedJson);
+        const players = mergeAdvancedBlock(playerBase, playerAdvanced, 'PLAYER_ID', PLAYER_ADVANCED_FIELDS);
+        const teams = mergeAdvancedBlock(teamBase, teamAdvanced, 'TEAM_ID', TEAM_ADVANCED_FIELDS);
 
         const payload: SeasonLeadersPayload = {
           season,

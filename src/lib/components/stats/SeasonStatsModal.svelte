@@ -6,6 +6,11 @@
 
   let headshotSrc = '';
   let fallbackIndex = 0;
+  let visibleHistory: { season: string; row: Record<string, any> | null }[] = [];
+  let modalHeaders: string[] = [];
+  let playerTeamAbbr = '';
+  let playerPosNum = '';
+  let playerAgeTag = '';
 
   $: if ($seasonStatsModal.open) {
     fallbackIndex = 0;
@@ -53,6 +58,17 @@
     if (upper === 'FG_PCT') return 'FG';
     if (upper === 'FG3_PCT') return '3P';
     if (upper === 'FT_PCT') return 'FT';
+    if (upper === 'TS_PCT') return 'TS';
+    if (upper === 'EFG_PCT') return 'eFG';
+    if (upper === 'USG_PCT') return 'USG';
+    if (upper === 'AST_PCT') return 'AST%';
+    if (upper === 'REB_PCT') return 'REB%';
+    if (upper === 'OREB_PCT') return 'OREB%';
+    if (upper === 'DREB_PCT') return 'DREB%';
+    if (upper === 'TM_TOV_PCT') return 'TOV%';
+    if (upper === 'OFF_RATING') return 'ORtg';
+    if (upper === 'DEF_RATING') return 'DRtg';
+    if (upper === 'NET_RATING') return 'NRtg';
     if (upper === 'BLKA') return 'BA';
     return String(header || '');
   }
@@ -73,6 +89,14 @@
       }
       out.push(h);
     });
+    const minIndex = out.findIndex((h) => String(h || '').toUpperCase() === 'MIN');
+    const ptsIndex = out.findIndex((h) => String(h || '').toUpperCase() === 'PTS');
+    if (minIndex >= 0 && ptsIndex >= 0 && ptsIndex !== minIndex + 1) {
+      const next = [...out];
+      const [pts] = next.splice(ptsIndex, 1);
+      next.splice(minIndex + 1, 0, pts);
+      return next;
+    }
     return out;
   }
 
@@ -104,12 +128,11 @@
     return abbr;
   }
 
-  function formatTriplePct(row: Record<string, any> | null): string {
-    if (!row) return '-';
-    const fg = row.FG_PCT ? `${Math.round(row.FG_PCT * 100)}` : '-';
-    const p3 = row.FG3_PCT ? `${Math.round(row.FG3_PCT * 100)}` : '-';
-    const ft = row.FT_PCT ? `${Math.round(row.FT_PCT * 100)}` : '-';
-    return `${fg}/${p3}/${ft}`;
+  function formatPct(value: unknown): string {
+    if (value === null || value === undefined || value === '') return '-';
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '-';
+    return `${Math.round(n * 100)}%`;
   }
 
   function trimHistory(rows: { season: string; row: Record<string, any> | null }[]): { season: string; row: Record<string, any> | null }[] {
@@ -117,22 +140,31 @@
     return rows.filter((entry) => Boolean(entry?.row));
   }
 
-  function getPlayerTeamAbbr(): string {
-    const direct = String($seasonStatsModal.team ?? '').trim();
-    if (direct) return direct.toUpperCase();
-
-    const fromRow = String($seasonStatsModal.row?.TEAM_ABBREVIATION ?? '').trim();
-    if (fromRow) return fromRow.toUpperCase();
-
-    const fromHistory = String($seasonStatsModal.historyRows?.[0]?.row?.TEAM_ABBREVIATION ?? '').trim();
-    if (fromHistory) return fromHistory.toUpperCase();
-
-    return '';
-  }
-
   $: visibleHistory = trimHistory($seasonStatsModal.historyRows ?? []);
   $: modalHeaders = normalizeHeaders($seasonStatsModal.headers ?? []);
-  $: playerTeamAbbr = getPlayerTeamAbbr();
+  $: {
+    const fromPlayer = String($seasonStatsModal.player?.teamAbbr ?? '').trim().toUpperCase();
+    const fromState = String($seasonStatsModal.team ?? '').trim().toUpperCase();
+    playerTeamAbbr = fromPlayer || fromState || '';
+  }
+  $: playerPosNum = (() => {
+    const position = String($seasonStatsModal.player?.position ?? '').trim();
+    const jersey = String($seasonStatsModal.player?.jersey ?? '').trim();
+    if (position && jersey) return `${position} · #${jersey}`;
+    if (position) return position;
+    if (jersey) return `#${jersey}`;
+    return '';
+  })();
+  $: playerAgeTag = (() => {
+    const raw = $seasonStatsModal.row?.AGE;
+    if (raw === null || raw === undefined || raw === '') return '';
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return '';
+    const years = Math.floor(n);
+    const days = Math.round((n - years) * 365);
+    if (days > 0) return `${years}y${days}d`;
+    return `${years}y`;
+  })();
 
   $: if ($seasonStatsModal.open) {
     tick();
@@ -181,28 +213,64 @@
                         <span>{playerTeamAbbr}</span>
                       </span>
                     {/if}
-                    {#if playerTeamAbbr && $seasonStatsModal.player.position} · {/if}
-                    {#if $seasonStatsModal.player.position}{$seasonStatsModal.player.position}{/if}
-                    {#if (playerTeamAbbr || $seasonStatsModal.player.position) && $seasonStatsModal.player.jersey} · {/if}
-                    {#if $seasonStatsModal.player.jersey}#{$seasonStatsModal.player.jersey}{/if}
+                    {#if playerTeamAbbr && playerPosNum} · {/if}
+                    {#if playerPosNum}{playerPosNum}{/if}
                   </div>
-                  {#if $seasonStatsModal.seasonLabel}
-                    <div>{$seasonStatsModal.seasonLabel}</div>
+                  {#if $seasonStatsModal.seasonLabel || playerAgeTag}
+                    <div>
+                      {$seasonStatsModal.seasonLabel}
+                      {#if $seasonStatsModal.seasonLabel && playerAgeTag} · {/if}
+                      {playerAgeTag}
+                    </div>
                   {/if}
                 </div>
               </div>
             </div>
 
             {#if $seasonStatsModal.row}
-              <div class="grid grid-cols-2 gap-2 text-xs text-white/80">
-                <div class="rounded border border-white/10 px-2 py-1">GP {$seasonStatsModal.row.GP ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">MIN {$seasonStatsModal.row.MIN ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">PTS {$seasonStatsModal.row.PTS ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">REB {$seasonStatsModal.row.REB ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">AST {$seasonStatsModal.row.AST ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">STL {$seasonStatsModal.row.STL ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">BLK {$seasonStatsModal.row.BLK ?? '-'}</div>
-                <div class="rounded border border-white/10 px-2 py-1">% {formatTriplePct($seasonStatsModal.row)}</div>
+              <div class="grid grid-cols-5 gap-2 text-xs text-white/80">
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">GP</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.GP ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">MIN</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.MIN ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">FG</div>
+                  <div class="text-sm font-medium text-white">{formatPct($seasonStatsModal.row.FG_PCT)}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">3P</div>
+                  <div class="text-sm font-medium text-white">{formatPct($seasonStatsModal.row.FG3_PCT)}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">FT</div>
+                  <div class="text-sm font-medium text-white">{formatPct($seasonStatsModal.row.FT_PCT)}</div>
+                </div>
+              </div>
+              <div class="grid grid-cols-5 gap-2 text-xs text-white/80">
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">PTS</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.PTS ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">REB</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.REB ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">AST</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.AST ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">STL</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.STL ?? '-'}</div>
+                </div>
+                <div class="rounded border border-white/10 px-2 py-1">
+                  <div class="text-[10px] text-white/60">BLK</div>
+                  <div class="text-sm font-medium text-white">{$seasonStatsModal.row.BLK ?? '-'}</div>
+                </div>
               </div>
               {#if $seasonStatsModal.headers?.length}
                 <div class="border-t border-white/10 pt-3">

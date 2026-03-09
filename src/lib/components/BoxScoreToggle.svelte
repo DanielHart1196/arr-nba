@@ -161,7 +161,7 @@
               </div>
             {/if}
             {#if players}
-              <StatsTable players={roster} />
+              <StatsTable players={roster} currentTeamAbbr={side === 'away' ? awayAb : homeAb} />
             {/if}
           {:else}
             <div class="swipe-area min-w-0 overflow-x-hidden">

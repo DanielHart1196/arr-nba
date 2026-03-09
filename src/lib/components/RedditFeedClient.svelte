@@ -14,7 +14,7 @@
   import { nbaService } from '../services/nba.service';
   import { createPairKey } from '../utils/reddit.utils';
   import { expandTeamNames } from '../utils/team-matching.utils';
-  import { getTeamLogoPathByAbbr, getTeamLogoScaleByAbbr } from '../utils/team.utils';
+  import TeamLogo from './TeamLogo.svelte';
   import RedditCommentNode from './RedditCommentNode.svelte';
   import type { RedditComment, RedditPost, RedditSearchDiagnostics } from '../types/nba';
 
@@ -84,6 +84,11 @@
     LIVE: { reddit: false, away: false, home: false },
     POST: { reddit: false, away: false, home: false }
   };
+  let prefetchInFlight: Record<FeedMode, Record<ThreadSource, boolean>> = {
+    LIVE: { reddit: false, away: false, home: false },
+    POST: { reddit: false, away: false, home: false }
+  };
+  let lastBackgroundPrefetchKey = '';
 
   function emptyModeCache(): ModeCache {
     return { thread: null, comments: [] };
@@ -407,6 +412,9 @@
       ensureActiveSourceLoaded(currentMode);
     }
   }
+  $: if (awayName && homeName) {
+    scheduleBackgroundPrefetchAllSources();
+  }
 
   async function fetchCommentsFor(
     post: RedditPost,
@@ -713,15 +721,15 @@
   }
 
   async function prefetchSingleTeamSource(targetMode: FeedMode, targetSource: 'away' | 'home'): Promise<void> {
-    if (triedFetch[targetMode][targetSource]) return;
+    if (prefetchInFlight[targetMode][targetSource]) return;
+    if (cache[targetMode][targetSource].thread?.id && cache[targetMode][targetSource].comments.length > 0) return;
     const subreddit = sourceToSubreddit(targetSource);
     if (!subreddit) {
       triedFetch[targetMode][targetSource] = true;
       return;
     }
 
-    triedFetch[targetMode][targetSource] = true;
-    lastFetchAttemptAt[targetMode][targetSource] = Date.now();
+    prefetchInFlight[targetMode][targetSource] = true;
 
     try {
       const result = await withTimeout(
@@ -735,6 +743,8 @@
         `subredditSearch:${subreddit}`
       );
 
+      triedFetch[targetMode][targetSource] = true;
+      lastFetchAttemptAt[targetMode][targetSource] = Date.now();
       const post = result?.post ?? null;
       cache[targetMode][targetSource].thread = post;
       writeStoredThread(targetMode, targetSource, post);
@@ -761,6 +771,67 @@
         subreddit,
         error: (error as Error)?.message ?? 'unknown'
       });
+    } finally {
+      prefetchInFlight[targetMode][targetSource] = false;
+    }
+  }
+
+  async function prefetchRedditSource(targetMode: FeedMode): Promise<void> {
+    const targetSource: ThreadSource = 'reddit';
+    if (prefetchInFlight[targetMode][targetSource]) return;
+    if (cache[targetMode][targetSource].thread?.id && cache[targetMode][targetSource].comments.length > 0) return;
+    if (!awayName || !homeName) return;
+
+    prefetchInFlight[targetMode][targetSource] = true;
+    try {
+      let post = cache[targetMode][targetSource].thread ?? readStoredThread(targetMode, targetSource);
+      if (eventDate && !isThreadWithinWindow(post, targetMode, eventDate)) {
+        post = null;
+        clearStoredThread(targetMode, targetSource);
+      }
+
+      if (!post && eventId) {
+        const eventCached = nbaService.getCachedThreadForEvent(eventId, targetMode === 'POST' ? 'post' : 'live');
+        if (eventCached && (!eventDate || isThreadWithinWindow(eventCached, targetMode, eventDate))) {
+          post = eventCached;
+        }
+      }
+
+      if (!post) {
+        const result = await withTimeout(
+          nbaService.searchRedditThread({
+            type: targetMode === 'POST' ? 'post' : 'live',
+            awayCandidates: [awayName],
+            homeCandidates: [homeName],
+            eventDate,
+            eventId
+          }),
+          'prefetchRedditSearch'
+        );
+        post = result?.post ?? null;
+      }
+
+      triedFetch[targetMode][targetSource] = true;
+      lastFetchAttemptAt[targetMode][targetSource] = Date.now();
+      cache[targetMode][targetSource].thread = post;
+      writeStoredThread(targetMode, targetSource, post);
+      cache = { ...cache };
+
+      if (!post?.id) return;
+      const sort: SortChoice = targetMode === 'POST' ? 'top' : 'new';
+      const commentsResult = await nbaService.getRedditComments(post.id, sort, post.permalink);
+      const nextComments = sortedCopy(commentsResult.comments ?? [], sort);
+      applyCollapsedMap(nextComments, collapsedByView[makeViewKey(targetMode, targetSource)] ?? {});
+      cache[targetMode][targetSource].comments = nextComments;
+      syncCollapsedMapFor(targetMode, targetSource);
+      cache = { ...cache };
+    } catch (error) {
+      pushInlineDebugLog('warn', 'prefetch reddit source failed', {
+        ...commonDebugContext(targetMode, targetSource, 'prefetchReddit'),
+        error: (error as Error)?.message ?? 'unknown'
+      });
+    } finally {
+      prefetchInFlight[targetMode][targetSource] = false;
     }
   }
 
@@ -769,6 +840,30 @@
       prefetchSingleTeamSource(targetMode, 'away'),
       prefetchSingleTeamSource(targetMode, 'home')
     ]);
+  }
+
+  async function prefetchAllSourcesForMode(targetMode: FeedMode): Promise<void> {
+    await prefetchRedditSource(targetMode);
+    await prefetchTeamSources(targetMode);
+  }
+
+  function scheduleBackgroundPrefetchAllSources(): void {
+    if (!awayName || !homeName) return;
+    const key = `${awayName}|${homeName}|${eventDate ?? ''}|${eventId ?? ''}`;
+    if (key === lastBackgroundPrefetchKey) return;
+    lastBackgroundPrefetchKey = key;
+
+    const run = () => {
+      prefetchAllSourcesForMode('LIVE').catch(() => {});
+      prefetchAllSourcesForMode('POST').catch(() => {});
+    };
+
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      const idle = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
+      idle.requestIdleCallback?.(run, { timeout: 1200 });
+      return;
+    }
+    setTimeout(run, 0);
   }
 
   async function ensureTeamThreadAndComments(targetMode: FeedMode, targetSource: 'away' | 'home'): Promise<void> {
@@ -1006,12 +1101,6 @@
     }
   }
 
-  function getPickerLogoStyle(abbr: string): string {
-    const scale = getTeamLogoScaleByAbbr(abbr, 1.12);
-    const sizeRem = 2 * scale; // Base picker logo size is 2rem (h-8/w-8)
-    return `width:${sizeRem}rem;height:${sizeRem}rem;display:block;object-position:center center;flex-shrink:0;`;
-  }
-
   onMount(() => {
     restorePersistedUIState();
     if (typeof window === 'undefined') return;
@@ -1092,7 +1181,7 @@
         on:click={() => handleSourceClick('away')}
       >
         {#if awayLogoAbbr}
-          <img src={getTeamLogoPathByAbbr(awayLogoAbbr)} alt={awaySourceLabel} class="object-contain" style={getPickerLogoStyle(awayLogoAbbr)} loading="lazy" decoding="async" />
+          <TeamLogo abbr={awayLogoAbbr} alt={awaySourceLabel} className="h-8 w-8 object-contain" baseScale={1.12} />
         {:else}
           <span class="text-[10px] text-white/80">{awaySourceLabel}</span>
         {/if}
@@ -1105,7 +1194,7 @@
         on:click={() => handleSourceClick('home')}
       >
         {#if homeLogoAbbr}
-          <img src={getTeamLogoPathByAbbr(homeLogoAbbr)} alt={homeSourceLabel} class="object-contain" style={getPickerLogoStyle(homeLogoAbbr)} loading="lazy" decoding="async" />
+          <TeamLogo abbr={homeLogoAbbr} alt={homeSourceLabel} className="h-8 w-8 object-contain" baseScale={1.12} />
         {:else}
           <span class="text-[10px] text-white/80">{homeSourceLabel}</span>
         {/if}

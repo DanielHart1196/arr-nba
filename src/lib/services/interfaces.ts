@@ -25,6 +25,10 @@ export interface IRedditDataSource {
   ): Promise<any>;
   getCommentsRaw(postId: string, sort: string, permalink?: string): Promise<any>;
   getThreadContent(permalink: string): Promise<any>;
-  getSubredditFeed(subreddit: string, sort?: 'new' | 'hot'): Promise<any>;
+  getSubredditFeed(
+    subreddit: string,
+    sort?: 'new' | 'hot' | 'top',
+    timeRange?: 'day' | 'week' | 'month' | 'year' | 'all'
+  ): Promise<any>;
   fetchRaw(url: string): Promise<any>;
 }

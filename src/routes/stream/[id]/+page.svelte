@@ -3,6 +3,7 @@
   import Hls from 'hls.js';
   import { nbaService } from '../../../lib/services/nba.service';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
+  import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
 
   export let data: { id: string };
@@ -49,7 +50,13 @@
     const home = payload?.linescores?.home?.team?.displayName || '';
     title = away && home ? `${away} vs ${home}` : title;
 
-    const resolved = await findSharkStreamByTeams(away, home);
+    const awayAbbr = getTeamLogoAbbr(payload?.linescores?.away?.team ?? {});
+    const homeAbbr = getTeamLogoAbbr(payload?.linescores?.home?.team ?? {});
+    const resolved = await findSharkStreamByTeams(away, home, {
+      awayAbbr,
+      homeAbbr,
+      eventId: data.id
+    });
     if (resolved) {
       streamUrl = resolved.url;
       streamMode = resolved.mode;

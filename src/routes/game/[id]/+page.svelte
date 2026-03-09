@@ -80,14 +80,20 @@
       }
 
       if (!away || !home) return;
-      const key = `${away}|${home}`;
+      const key = `${data.id}|${away}|${home}`;
       const now = Date.now();
       if (key === lastStreamSearchKey && now - lastStreamSearchAt < 10 * 60 * 1000) {
         return;
       }
       lastStreamSearchKey = key;
       lastStreamSearchAt = now;
-      const resolved = await findSharkStreamByTeams(away, home);
+      const awayAbbr = getTeamLogoAbbr(payload?.linescores?.away?.team ?? {});
+      const homeAbbr = getTeamLogoAbbr(payload?.linescores?.home?.team ?? {});
+      const resolved = await findSharkStreamByTeams(away, home, {
+        awayAbbr,
+        homeAbbr,
+        eventId: data.id
+      });
       if (resolved) dynamicStreams = [resolved];
     } catch (e) {
       console.error("Stream search failed:", e);
@@ -109,7 +115,6 @@
   }
 
   async function openGlobalStream(): Promise<void> {
-    await ensureGameStream();
     const sources = dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams;
     streamOverlayStore.open({
       contextId: data.id,
@@ -118,11 +123,15 @@
       storageKey: 'arrnba.streamOverlay.global',
       closedButtonLabel: 'Open Stream'
     });
+    if (dynamicStreams.length === 0 && !streamsLoading) {
+      void ensureGameStream();
+    }
   }
 
 
   $: streamOverlayStore.updateIfActive(data.id, {
-    title: streamsLoading ? 'Searching...' : 'Live Stream'
+    title: streamsLoading ? 'Searching...' : 'Live Stream',
+    sources: dynamicStreams.length > 0 ? dynamicStreams : placeholderStreams
   });
   // --- END OF NEW CODE ---
 
