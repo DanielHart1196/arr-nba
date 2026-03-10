@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 
-const CLOUD_ORIGIN = 'https://arr-nba.pages.dev';
+const DEFAULT_API_ORIGIN = 'https://arr-nba.pages.dev';
 
 function normalizePath(path: string): string {
   if (!path) return '/';
@@ -23,6 +23,6 @@ export function isNativeRuntime(): boolean {
 export function resolveApiUrl(path: string): string {
   const normalized = normalizePath(path);
   if (normalized.startsWith('http://') || normalized.startsWith('https://')) return normalized;
-  return isNativeRuntime() ? `${CLOUD_ORIGIN}${normalized}` : normalized;
+  const apiOrigin = (import.meta.env.PUBLIC_API_ORIGIN || DEFAULT_API_ORIGIN).replace(/\/+$/, '');
+  return isNativeRuntime() ? `${apiOrigin}${normalized}` : normalized;
 }
-

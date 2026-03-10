@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import Hls from 'hls.js';
+  import { onDestroy, onMount } from 'svelte';
   import { nbaService } from '../../../lib/services/nba.service';
   import { findSharkStreamByTeams, STREAM_FALLBACK } from '../../../lib/utils/stream.utils';
   import { getTeamLogoAbbr } from '../../../lib/utils/team.utils';
   import type { BoxscoreResponse } from '../../../lib/types/nba';
+
+  type HlsModule = typeof import('hls.js');
+  type HlsInstance = InstanceType<HlsModule['default']>;
 
   export let data: { id: string };
 
@@ -14,7 +16,8 @@
   let streamMode: 'video' | 'embed' | 'external' = 'embed';
   let error = '';
   let videoEl: HTMLVideoElement | null = null;
-  let hls: Hls | null = null;
+  let hls: HlsInstance | null = null;
+  let hlsCtor: HlsModule['default'] | null = null;
   let isDirectStream = false;
   let stallWatchdog: ReturnType<typeof setInterval> | null = null;
   let lastKnownTime = 0;
@@ -82,7 +85,19 @@
     lastRecoverAt = 0;
   }
 
-  function attachVideo(): void {
+  async function getHlsCtor(): Promise<HlsModule['default'] | null> {
+    if (hlsCtor) return hlsCtor;
+    try {
+      const mod = await import('hls.js');
+      hlsCtor = mod.default;
+      return hlsCtor;
+    } catch (error) {
+      console.error('[stream][page] failed to load hls.js', error);
+      return null;
+    }
+  }
+
+  async function attachVideo(): Promise<void> {
     if (!videoEl || !streamUrl || streamMode !== 'video') return;
     detachHls();
     const isHls = streamUrl.toLowerCase().includes('.m3u8');
@@ -98,7 +113,8 @@
       return;
     }
 
-    if (!Hls.isSupported()) return;
+    const Hls = await getHlsCtor();
+    if (!Hls?.isSupported()) return;
     const config = isDirectStream
       ? {
           enableWorker: true,
@@ -180,8 +196,12 @@
     }
   });
 
+  onDestroy(() => {
+    detachHls();
+  });
+
   $: if (!loading && streamMode === 'video' && videoEl && streamUrl) {
-    attachVideo();
+    void attachVideo();
   }
 </script>
 

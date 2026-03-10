@@ -5,8 +5,8 @@
   import SeasonStatsModal from '$lib/components/stats/SeasonStatsModal.svelte';
   import { openSeasonStatsModal, updateSeasonStatsModal } from '$lib/stores/seasonStatsModal.store';
   import { preferredHeadshotUrl } from '$lib/utils/headshots';
+  import { loadAllSeasonHistoryEntries, loadAvailableHistorySeasons, loadSeasonHistoryEntry } from '$lib/utils/season-history';
   import { getSeasonLeadersWithFallback } from '$lib/utils/season-leaders';
-  import { resolveApiUrl } from '$lib/utils/runtime';
 
   export let data: { data: any; error: string | null };
 
@@ -17,13 +17,7 @@
   let season = currentSeason;
   let error: string | null = data?.error ?? null;
   let seasons: string[] = buildSeasonList();
-  let historyPayload: {
-    seasons: {
-      season: string;
-      players?: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } };
-      teams?: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } };
-    }[];
-  } | null = null;
+  let historyPayload: { seasons: any[] } | null = null;
   let teamsData: { headers?: string[]; rows: any[] } = initialStats?.teams ?? { headers: [], rows: [] };
   let playerRows: any[] = [];
   let playerRowsRaw: any[] = [];
@@ -97,15 +91,6 @@
       rowsLen(entry?.teams?.perGame) > 0 ||
       rowsLen(entry?.teams?.totals) > 0
     );
-  }
-
-  function availableHistorySeasons(payload: any): string[] {
-    const entries = Array.isArray(payload?.seasons) ? payload.seasons : [];
-    return entries
-      .filter((entry) => seasonHasUsableData(entry))
-      .map((entry) => String(entry?.season ?? ''))
-      .filter(Boolean)
-      .filter((s) => s !== currentSeason);
   }
 
   function formatName(n: string): string {
@@ -299,13 +284,12 @@
       }
       return;
     }
-    await ensureHistoryPayload();
+    const entry = await loadSeasonHistoryEntry(seasonKey);
     if (!canApply()) return;
-    if (!historyPayload) {
-      error = error ?? 'Failed to load season history';
+    if (!entry) {
+      error = error ?? `Failed to load season history for ${seasonKey}`;
       return;
     }
-    const entry = historyPayload?.seasons?.find((s) => String(s?.season ?? '') === seasonKey);
     const playerBlock = requestedPerMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
     const teamBlock = requestedPerMode === 'Totals' ? entry?.teams?.totals : entry?.teams?.perGame;
     applyPlayerData(playerBlock ?? null);
@@ -476,15 +460,16 @@
     return rows;
   }
 
-  const HISTORY_URL = '/season-history.json?v=3';
-
   async function ensureHistoryPayload(): Promise<void> {
     if (historyPayload) return;
     try {
-      const res = await fetch(HISTORY_URL);
-      if (!res.ok) throw new Error(`Failed to load season history (${res.status})`);
-      historyPayload = await res.json();
-      const fileSeasons = availableHistorySeasons(historyPayload);
+      const entries = await loadAllSeasonHistoryEntries();
+      historyPayload = { seasons: entries };
+      const fileSeasons = entries
+        .filter((entry) => seasonHasUsableData(entry))
+        .map((entry) => String(entry?.season ?? ''))
+        .filter(Boolean)
+        .filter((s) => s !== currentSeason);
       if (fileSeasons.length > 0) {
         seasons = fileSeasons;
       }
@@ -496,10 +481,7 @@
   async function prefetchHistorySeasons(): Promise<void> {
     if (historyPayload) return;
     try {
-      const res = await fetch(HISTORY_URL);
-      if (!res.ok) return;
-      historyPayload = await res.json();
-      const fileSeasons = availableHistorySeasons(historyPayload);
+      const fileSeasons = await loadAvailableHistorySeasons(currentSeason);
       if (fileSeasons.length > 0) {
         seasons = fileSeasons;
       }
@@ -602,7 +584,7 @@
   <div class="flex items-center justify-between mb-4">
     <div class="w-[64px]"></div>
     <div class="flex-1 flex items-center justify-center">
-      <h1 class="text-lg font-semibold cursor-pointer" on:click={toggleMenu}>Stats</h1>
+      <button type="button" class="text-lg font-semibold" on:click={toggleMenu}>Stats</button>
     </div>
     <div class="relative w-[64px] flex justify-end items-center">
       <select

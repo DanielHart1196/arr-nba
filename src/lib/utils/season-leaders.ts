@@ -1,22 +1,9 @@
 import { resolveApiUrl } from '$lib/utils/runtime';
+import { loadSeasonHistoryEntry } from '$lib/utils/season-history';
 import { isNativeRuntime } from '$lib/utils/runtime';
 
 type LeadersBlock = { headers?: string[]; rows: any[] };
 type LeadersPayload = { players: LeadersBlock; teams: LeadersBlock };
-
-type HistoryPayload = {
-  seasons?: Array<{
-    season?: string;
-    players?: {
-      perGame?: LeadersBlock;
-      totals?: LeadersBlock;
-    };
-    teams?: {
-      perGame?: LeadersBlock;
-      totals?: LeadersBlock;
-    };
-  }>;
-};
 
 const EMPTY_BLOCK: LeadersBlock = { headers: [], rows: [] };
 const NATIVE_CACHE_PREFIX = 'arrnba:native:season-leaders:';
@@ -136,11 +123,9 @@ async function fetchNativeSeasonLeaders(
   }
 }
 
-async function readLocalHistory(): Promise<HistoryPayload | null> {
+async function readLocalHistorySeason(season: string) {
   try {
-    const res = await fetch('/season-history.json?v=3');
-    if (!res.ok) return null;
-    return (await res.json()) as HistoryPayload;
+    return await loadSeasonHistoryEntry(season);
   } catch {
     return null;
   }
@@ -214,8 +199,7 @@ export async function getSeasonLeadersWithFallback(
   const nativeDirect = await fetchNativeSeasonLeaders(season, perMode);
   if (nativeDirect) return nativeDirect;
 
-  const history = await readLocalHistory();
-  const entry = (history?.seasons ?? []).find((s) => String(s?.season ?? '') === season);
+  const entry = await readLocalHistorySeason(season);
   const players = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
   const teams = perMode === 'Totals' ? entry?.teams?.totals : entry?.teams?.perGame;
 

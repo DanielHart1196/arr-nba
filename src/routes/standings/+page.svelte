@@ -163,7 +163,7 @@
 <div class="p-4 min-h-screen">
   <div class="flex items-center justify-between mb-4">
     <div class="w-[64px]"></div>
-    <h1 class="flex-1 text-center text-lg font-semibold cursor-pointer" on:click={toggleMenu}>NBA Standings</h1>
+    <button type="button" class="flex-1 text-center text-lg font-semibold" on:click={toggleMenu}>NBA Standings</button>
     <div class="relative w-[64px] flex justify-end items-center">
       {#if menuOpen}
         <div

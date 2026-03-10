@@ -2,8 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { shardSeasonHistory } = require('./shard-season-history.cjs');
 
-const OUT_PATH = path.join(__dirname, '..', 'static', 'season-history.json');
+const OUT_PATH = path.join(__dirname, '..', 'data', 'season-history.json');
 const START_YEAR = 2024; // will walk down until stop condition
 const MIN_YEAR = 1946;
 const MEASURE_TYPE = 'Base';
@@ -139,6 +140,7 @@ async function fetchSeasonWithRetry(season) {
 }
 
 async function main() {
+  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
   let seasons = [];
   try {
     if (fs.existsSync(OUT_PATH)) {
@@ -200,6 +202,7 @@ async function main() {
 
   const final = Array.from(merged.values()).sort((a, b) => (a.season < b.season ? 1 : -1));
   fs.writeFileSync(OUT_PATH, JSON.stringify({ seasons: final }));
+  shardSeasonHistory();
   console.log(`Wrote ${final.length} seasons to ${OUT_PATH}`);
 }
 

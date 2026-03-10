@@ -2,8 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { shardSeasonHistory } = require('./shard-season-history.cjs');
 
-const OUT_FILE = path.join(__dirname, '..', 'static', 'season-history.json');
+const OUT_FILE = path.join(__dirname, '..', 'data', 'season-history.json');
 const DELAY_MS = 250;
 
 function seasonFromDate(date = new Date()) {
@@ -104,6 +105,7 @@ async function fetchSeason(season, perMode) {
 }
 
 async function main() {
+  fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
   const seasons = buildSeasonList(25);
   const currentSeason = seasonFromDate();
   const targetSeasons = seasons.filter((s) => s !== currentSeason);
@@ -130,6 +132,7 @@ async function main() {
 
   const payload = { seasons: results };
   fs.writeFileSync(OUT_FILE, JSON.stringify(payload));
+  shardSeasonHistory();
   process.stdout.write(`Wrote ${OUT_FILE}\n`);
 }
 

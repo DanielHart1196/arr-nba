@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import Hls from 'hls.js';
+
+  type HlsModule = typeof import('hls.js');
+  type HlsInstance = InstanceType<HlsModule['default']>;
 
   type StreamSource = { label: string; url: string; mode?: 'auto' | 'video' | 'embed' | 'external' };
 
@@ -18,7 +20,8 @@
 
   let rootEl: HTMLDivElement | null = null;
   let videoEl: HTMLVideoElement | null = null;
-  let hls: Hls | null = null;
+  let hls: HlsInstance | null = null;
+  let hlsCtor: HlsModule['default'] | null = null;
   let stallWatchdog: ReturnType<typeof setInterval> | null = null;
   let lastKnownCurrentTime = 0;
   let stalledTicks = 0;
@@ -173,6 +176,18 @@
       hls = null;
     }
     detachVideoDiagnostics();
+  }
+
+  async function getHlsCtor(): Promise<HlsModule['default'] | null> {
+    if (hlsCtor) return hlsCtor;
+    try {
+      const mod = await import('hls.js');
+      hlsCtor = mod.default;
+      return hlsCtor;
+    } catch (error) {
+      console.error('[stream][overlay] failed to load hls.js', error);
+      return null;
+    }
   }
 
   function startStallWatchdog(): void {
@@ -416,10 +431,11 @@
 
     if (isHlsUrl(url)) {
       const canPlayNativeHls = videoEl.canPlayType('application/vnd.apple.mpegurl') !== '';
+      const Hls = canPlayNativeHls ? null : await getHlsCtor();
       console.log('[stream][overlay] hls candidate', {
         url,
         canPlayNativeHls,
-        hlsJsSupported: Hls.isSupported()
+        hlsJsSupported: Hls?.isSupported?.() ?? false
       });
       if (canPlayNativeHls) {
         pushDiagnostic('overlay.hls.native');
@@ -428,7 +444,7 @@
         startStallWatchdog();
         return;
       }
-      if (Hls.isSupported()) {
+      if (Hls?.isSupported()) {
         pushDiagnostic('overlay.hls.hlsjs');
         console.log('[stream][overlay] using hls.js');
         hls = new Hls({

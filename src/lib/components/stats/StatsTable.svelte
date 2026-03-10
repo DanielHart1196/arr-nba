@@ -3,6 +3,7 @@
   import type { Player } from '../../types/nba';
   import { openSeasonStatsModal, seasonStatsModal, updateSeasonStatsModal } from '../../stores/seasonStatsModal.store';
   import { preferredHeadshotUrl } from '../../utils/headshots';
+  import { loadAllSeasonHistoryEntries } from '../../utils/season-history';
   import { getSeasonLeadersWithFallback } from '../../utils/season-leaders';
 
   export let players: Player[];
@@ -87,17 +88,9 @@
   let seasonData: { players: { headers?: string[]; rows: any[] } } | null = null;
   let selectedPlayer: Player | null = null;
   let selectedSeasonRow: Record<string, any> | null = null;
-  type HistoryStaticData = {
-    seasons: { season: string; players: { perGame?: { headers?: string[]; rows: any[] }; totals?: { headers?: string[]; rows: any[] } } }[];
-  };
   const SEASON_CACHE_KEY = 'arrnba:season-leaders-cache';
   const SEASON_CACHE_TTL_MS = 10 * 60 * 1000;
   const historyCache = new Map<string, { rows: { season: string; row: Record<string, any> | null }[]; headers: string[] }>();
-  const HISTORY_STATIC_KEY = 'arrnba:season-history-static:v3';
-  const HISTORY_FETCH_TIMEOUT_MS = 18000;
-  const HISTORY_FETCH_MAX_RETRIES = 2;
-  let staticHistory: HistoryStaticData | null = null;
-  let staticHistoryPromise: Promise<HistoryStaticData> | null = null;
   let historyRequestSeq = 0;
 
   const unsubscribeModal = seasonStatsModal.subscribe((state) => {
@@ -234,78 +227,6 @@
     return seasons;
   }
 
-  function readStaticHistory(): HistoryStaticData | null {
-    if (typeof localStorage === 'undefined') return null;
-    try {
-      const raw = localStorage.getItem(HISTORY_STATIC_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed?.seasons)) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  }
-
-  function writeStaticHistory(data: HistoryStaticData): void {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem(HISTORY_STATIC_KEY, JSON.stringify(data));
-    } catch {
-      // Ignore quota errors; still ok for this session.
-    }
-  }
-
-  async function fetchSeasonHistoryJson(): Promise<HistoryStaticData> {
-    let lastErr: Error | null = null;
-    for (let attempt = 0; attempt <= HISTORY_FETCH_MAX_RETRIES; attempt++) {
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timeoutId = controller
-        ? setTimeout(() => controller.abort(), HISTORY_FETCH_TIMEOUT_MS)
-        : null;
-      try {
-        const version = 3 + attempt;
-        const res = await fetch(`/season-history.json?v=${version}`, {
-          cache: 'no-store',
-          signal: controller?.signal
-        });
-        if (!res.ok) throw new Error(`Season history error: ${res.status}`);
-        const json = await res.json();
-        if (!Array.isArray(json?.seasons)) throw new Error('Season history data invalid');
-        return json as HistoryStaticData;
-      } catch (error: any) {
-        lastErr = error instanceof Error ? error : new Error(String(error ?? 'Unknown history fetch error'));
-        if (attempt < HISTORY_FETCH_MAX_RETRIES) {
-          await new Promise((resolve) => setTimeout(resolve, 220 * (attempt + 1)));
-        }
-      } finally {
-        if (timeoutId) clearTimeout(timeoutId);
-      }
-    }
-    throw (lastErr ?? new Error('Failed to load season history'));
-  }
-
-  async function ensureStaticHistoryLoaded(): Promise<HistoryStaticData> {
-    if (staticHistory) return staticHistory;
-    const fromStorage = readStaticHistory();
-    if (fromStorage) {
-      staticHistory = fromStorage;
-      return fromStorage;
-    }
-    if (!staticHistoryPromise) {
-      staticHistoryPromise = (async () => {
-        const json = await fetchSeasonHistoryJson();
-        staticHistory = json;
-        writeStaticHistory(json);
-        return json;
-      })();
-      staticHistoryPromise.finally(() => {
-        staticHistoryPromise = null;
-      });
-    }
-    return staticHistoryPromise;
-  }
-
   async function loadSeasonHistory(player: Player): Promise<void> {
     const playerId = player?.id ? String(player.id) : '';
     if (!playerId) return;
@@ -337,12 +258,12 @@
 
     updateSeasonStatsModal({ historyLoading: true, historyError: '' });
     try {
-      const historyData = await ensureStaticHistoryLoaded();
+      const historyData = await loadAllSeasonHistoryEntries();
       if (!canApply()) return;
 
       const rows: { season: string; row: Record<string, any> | null }[] = [];
       let headers: string[] = [];
-      for (const entry of historyData.seasons) {
+      for (const entry of historyData) {
         const season = String(entry?.season ?? '');
         const playersBlock: any = entry?.players?.perGame ?? entry?.players ?? {};
         const seasonHeaders = filterSeasonHeaders(playersBlock?.headers ?? []);

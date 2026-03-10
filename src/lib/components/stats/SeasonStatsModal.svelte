@@ -172,11 +172,16 @@
 </script>
 
 {#if $seasonStatsModal.open}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" on:click={closeSeasonStatsModal}>
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <button
+      type="button"
+      class="absolute inset-0 bg-black/70"
+      aria-label="Close season stats modal"
+      on:click={closeSeasonStatsModal}
+    ></button>
     <div
-      class="w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[calc(90svh-2rem)] flex flex-col"
+      class="relative z-[1] w-full max-w-[92vw] min-w-0 overflow-hidden rounded-lg border border-white/15 bg-[#0e0e0e] shadow-xl max-h-[calc(90svh-2rem)] flex flex-col"
       style="max-width:92vw;"
-      on:click|stopPropagation
     >
       <div class="relative p-4 pb-4 overflow-hidden flex flex-col gap-4 min-h-0 h-full">
         <button
