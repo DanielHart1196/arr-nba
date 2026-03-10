@@ -26,6 +26,11 @@ async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number): Pr
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { signal: controller.signal });
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Season leaders client timeout after ${timeoutMs}ms`);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -203,8 +208,14 @@ export async function getSeasonLeadersWithFallback(
         perMode: json?.perMode ?? perMode,
         status: res.status
       };
-    } catch {
-      // Retry before falling back.
+    } catch (error: any) {
+      lastFailure = {
+        error: error?.message ?? 'Season leaders request failed',
+        diagnostics: error?.diagnostics ?? null,
+        season,
+        perMode,
+        status: null as any
+      };
     }
     if (i < apiTimeoutAttempts.length - 1) {
       await sleep(220);

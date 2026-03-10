@@ -163,16 +163,35 @@ async function fetchWithTimeout(
   }
 }
 
+async function withOverallTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(`${label} timeout after ${timeoutMs}ms`);
+      (error as any).diagnostics = { timeoutMs, label };
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export const GET = async ({ url }: any) => {
   const season = url.searchParams.get('season') || seasonFromDate();
   const perMode = url.searchParams.get('perMode') || 'PerGame';
   const cacheKey = `season-stats:v2:${season}:${perMode}`;
   const timeoutMs = 9000;
+  const overallTimeoutMs = 15000;
 
   try {
-    const data = await apiCache.getOrFetch<SeasonLeadersPayload>(
-      cacheKey,
-      async () => {
+    const data = await withOverallTimeout(
+      apiCache.getOrFetch<SeasonLeadersPayload>(
+        cacheKey,
+        async () => {
         const headers = buildHeaders();
         const playerBaseUrl = new URL('https://stats.nba.com/stats/leaguedashplayerstats');
         buildDashParams(playerBaseUrl, season, 'Base');
@@ -298,8 +317,11 @@ export const GET = async ({ url }: any) => {
         };
         lastGoodByKey.set(cacheKey, { data: payload, ts: Date.now() });
         return payload;
-      },
-      10 * 60 * 1000
+        },
+        10 * 60 * 1000
+      ),
+      overallTimeoutMs,
+      'season-leaders-handler'
     );
 
     return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
