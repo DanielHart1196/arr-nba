@@ -193,11 +193,9 @@ export const GET = async ({ url }: any) => {
         teamAdvancedUrl.searchParams.set('PerMode', perMode);
 
         const startedAt = Date.now();
-        const [playerBaseRes, teamBaseRes, playerAdvancedRes, teamAdvancedRes] = await Promise.all([
+        const [playerBaseRes, teamBaseRes] = await Promise.all([
           fetchWithTimeout(playerBaseUrl.toString(), { headers }, timeoutMs, 'player-base'),
-          fetchWithTimeout(teamBaseUrl.toString(), { headers }, timeoutMs, 'team-base'),
-          fetchWithTimeout(playerAdvancedUrl.toString(), { headers }, timeoutMs, 'player-advanced'),
-          fetchWithTimeout(teamAdvancedUrl.toString(), { headers }, timeoutMs, 'team-advanced')
+          fetchWithTimeout(teamBaseUrl.toString(), { headers }, timeoutMs, 'team-base')
         ]);
         const durationMs = Date.now() - startedAt;
 
@@ -227,45 +225,71 @@ export const GET = async ({ url }: any) => {
           };
           throw error;
         }
-        if (!playerAdvancedRes.ok) {
-          const body = await playerAdvancedRes.text().catch(() => '');
-          const error = new Error(`NBA player advanced stats error: ${playerAdvancedRes.status}`);
-          (error as any).diagnostics = {
-            durationMs,
-            playerAdvancedStatus: playerAdvancedRes.status,
-            playerAdvancedStatusText: playerAdvancedRes.statusText,
-            playerAdvancedCfRay: playerAdvancedRes.headers.get('cf-ray'),
-            playerAdvancedServer: playerAdvancedRes.headers.get('server'),
-            playerAdvancedBodySample: body.slice(0, 400)
-          };
-          throw error;
-        }
-        if (!teamAdvancedRes.ok) {
-          const body = await teamAdvancedRes.text().catch(() => '');
-          const error = new Error(`NBA team advanced stats error: ${teamAdvancedRes.status}`);
-          (error as any).diagnostics = {
-            durationMs,
-            teamAdvancedStatus: teamAdvancedRes.status,
-            teamAdvancedStatusText: teamAdvancedRes.statusText,
-            teamAdvancedCfRay: teamAdvancedRes.headers.get('cf-ray'),
-            teamAdvancedServer: teamAdvancedRes.headers.get('server'),
-            teamAdvancedBodySample: body.slice(0, 400)
-          };
-          throw error;
-        }
-
-        const [playerBaseJson, teamBaseJson, playerAdvancedJson, teamAdvancedJson] = await Promise.all([
+        const [playerBaseJson, teamBaseJson] = await Promise.all([
           playerBaseRes.json(),
-          teamBaseRes.json(),
-          playerAdvancedRes.json(),
-          teamAdvancedRes.json()
+          teamBaseRes.json()
         ]);
         const playerBase = mapResult(playerBaseJson);
         const teamBase = mapResult(teamBaseJson);
-        const playerAdvanced = mapResult(playerAdvancedJson);
-        const teamAdvanced = mapResult(teamAdvancedJson);
-        const players = mergeAdvancedBlock(playerBase, playerAdvanced, 'PLAYER_ID', PLAYER_ADVANCED_FIELDS);
-        const teams = mergeAdvancedBlock(teamBase, teamAdvanced, 'TEAM_ID', TEAM_ADVANCED_FIELDS);
+        let players = playerBase;
+        let teams = teamBase;
+
+        const advancedDiagnostics: Record<string, any> = {};
+        const [playerAdvancedResult, teamAdvancedResult] = await Promise.allSettled([
+          fetchWithTimeout(playerAdvancedUrl.toString(), { headers }, timeoutMs, 'player-advanced'),
+          fetchWithTimeout(teamAdvancedUrl.toString(), { headers }, timeoutMs, 'team-advanced')
+        ]);
+
+        if (playerAdvancedResult.status === 'fulfilled' && playerAdvancedResult.value.ok) {
+          const playerAdvancedJson = await playerAdvancedResult.value.json();
+          const playerAdvanced = mapResult(playerAdvancedJson);
+          players = mergeAdvancedBlock(playerBase, playerAdvanced, 'PLAYER_ID', PLAYER_ADVANCED_FIELDS);
+        } else {
+          const response = playerAdvancedResult.status === 'fulfilled' ? playerAdvancedResult.value : null;
+          const errorMessage = playerAdvancedResult.status === 'rejected'
+            ? (playerAdvancedResult.reason?.message ?? 'request failed')
+            : null;
+          advancedDiagnostics.playerAdvanced = response
+            ? {
+                status: response.status,
+                statusText: response.statusText,
+                cfRay: response.headers.get('cf-ray'),
+                server: response.headers.get('server')
+              }
+            : {
+                error: errorMessage
+              };
+        }
+
+        if (teamAdvancedResult.status === 'fulfilled' && teamAdvancedResult.value.ok) {
+          const teamAdvancedJson = await teamAdvancedResult.value.json();
+          const teamAdvanced = mapResult(teamAdvancedJson);
+          teams = mergeAdvancedBlock(teamBase, teamAdvanced, 'TEAM_ID', TEAM_ADVANCED_FIELDS);
+        } else {
+          const response = teamAdvancedResult.status === 'fulfilled' ? teamAdvancedResult.value : null;
+          const errorMessage = teamAdvancedResult.status === 'rejected'
+            ? (teamAdvancedResult.reason?.message ?? 'request failed')
+            : null;
+          advancedDiagnostics.teamAdvanced = response
+            ? {
+                status: response.status,
+                statusText: response.statusText,
+                cfRay: response.headers.get('cf-ray'),
+                server: response.headers.get('server')
+              }
+            : {
+                error: errorMessage
+              };
+        }
+
+        if (Object.keys(advancedDiagnostics).length > 0) {
+          console.warn('[season-leaders][advanced-partial]', {
+            season,
+            perMode,
+            durationMs,
+            diagnostics: advancedDiagnostics
+          });
+        }
 
         const payload: SeasonLeadersPayload = {
           season,
