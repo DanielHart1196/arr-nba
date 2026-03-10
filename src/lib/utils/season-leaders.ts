@@ -4,6 +4,13 @@ import { isNativeRuntime } from '$lib/utils/runtime';
 
 type LeadersBlock = { headers?: string[]; rows: any[] };
 type LeadersPayload = { players: LeadersBlock; teams: LeadersBlock };
+type SeasonLeadersFailure = {
+  error?: string;
+  diagnostics?: any;
+  season?: string;
+  perMode?: string;
+  status?: number;
+};
 
 const EMPTY_BLOCK: LeadersBlock = { headers: [], rows: [] };
 const NATIVE_CACHE_PREFIX = 'arrnba:native:season-leaders:';
@@ -160,6 +167,7 @@ export async function getSeasonLeadersWithFallback(
   season: string,
   perMode: 'PerGame' | 'Totals'
 ): Promise<LeadersPayload> {
+  let lastFailure: SeasonLeadersFailure | null = null;
   if (isNativeRuntime()) {
     const cacheKey = `${NATIVE_CACHE_PREFIX}${season}:${perMode}`;
     const cached = await readNativeCache(cacheKey);
@@ -188,6 +196,13 @@ export async function getSeasonLeadersWithFallback(
           teams: (json?.teams ?? EMPTY_BLOCK) as LeadersBlock
         };
       }
+      lastFailure = {
+        error: json?.error ?? `Season leaders API error: ${res.status}`,
+        diagnostics: json?.diagnostics ?? null,
+        season: json?.season ?? season,
+        perMode: json?.perMode ?? perMode,
+        status: res.status
+      };
     } catch {
       // Retry before falling back.
     }
@@ -202,6 +217,16 @@ export async function getSeasonLeadersWithFallback(
   const entry = await readLocalHistorySeason(season);
   const players = perMode === 'Totals' ? entry?.players?.totals : entry?.players?.perGame;
   const teams = perMode === 'Totals' ? entry?.teams?.totals : entry?.teams?.perGame;
+  const hasFallbackRows = (players?.rows?.length ?? 0) > 0 || (teams?.rows?.length ?? 0) > 0;
+
+  if (!hasFallbackRows && lastFailure) {
+    const error = new Error(lastFailure.error ?? 'Failed to load season leaders');
+    (error as any).diagnostics = lastFailure.diagnostics ?? null;
+    (error as any).season = lastFailure.season ?? season;
+    (error as any).perMode = lastFailure.perMode ?? perMode;
+    (error as any).status = lastFailure.status ?? null;
+    throw error;
+  }
 
   return {
     players: (players ?? EMPTY_BLOCK) as LeadersBlock,

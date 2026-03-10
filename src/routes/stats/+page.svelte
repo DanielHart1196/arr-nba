@@ -37,6 +37,7 @@
   let menuOpen = false;
   let menuPanelEl: HTMLDivElement | null = null;
   let menuListenersActive = false;
+  let debugLines: string[] = [];
   const perModeStatHeaders = new Set([
     'MIN',
     'FGM',
@@ -65,6 +66,12 @@
     const startYear = month >= 10 ? year : year - 1;
     const endYear = String(startYear + 1).slice(-2);
     return `${startYear}-${endYear}`;
+  }
+
+  function pushDebug(label: string, payload?: Record<string, unknown>): void {
+    const ts = new Date().toLocaleTimeString();
+    const line = payload ? `${ts} ${label} ${JSON.stringify(payload)}` : `${ts} ${label}`;
+    debugLines = [line, ...debugLines].slice(0, 18);
   }
 
   function buildSeasonList(count = 25): string[] {
@@ -266,14 +273,21 @@
       requestSeq === loadSeasonSeq &&
       season === seasonKey &&
       perMode === requestedPerMode;
+    pushDebug('loadSeason.start', { seasonKey, requestedPerMode, requestSeq });
     if (seasonKey === currentSeason) {
       try {
         let json = seasonLeadersCache.get(apiCacheKey);
         if (!json) {
+          pushDebug('current.fetch.begin', { seasonKey, requestedPerMode });
           json = await getSeasonLeadersWithFallback(seasonKey, requestedPerMode);
           seasonLeadersCache.set(apiCacheKey, json);
         }
         if (!canApply()) return;
+        pushDebug('current.fetch.ok', {
+          playerRows: json?.players?.rows?.length ?? 0,
+          teamRows: json?.teams?.rows?.length ?? 0,
+          cached: seasonLeadersCache.has(apiCacheKey)
+        });
         applyPlayerData(json?.players ?? null);
         teamsData = json?.teams ?? { headers: [], rows: [] };
         applyTeamData(teamsData);
@@ -281,6 +295,13 @@
       } catch (e: any) {
         if (!canApply()) return;
         error = e?.message ?? 'Failed to load season leaders';
+        pushDebug('current.fetch.error', {
+          message: e?.message ?? 'unknown',
+          season: e?.season ?? seasonKey,
+          perMode: e?.perMode ?? requestedPerMode,
+          status: e?.status ?? null,
+          diagnostics: e?.diagnostics ?? null
+        });
       }
       return;
     }
@@ -491,6 +512,7 @@
   }
 
   onMount(() => {
+    pushDebug('stats.mount', { currentSeason, initialPlayerRows: initialStats?.players?.rows?.length ?? 0 });
     loadSeason(season).catch(() => {});
     prefetchHistorySeasons().catch(() => {});
     addMenuOutsideListeners();
@@ -764,6 +786,25 @@
       </section>
     {/if}
   {/if}
+
+  <section class="mt-4 rounded border border-red-500/30 bg-black/80 p-3 text-[11px] text-red-100">
+    <div class="mb-2 font-semibold text-red-200">Stats Diagnostics</div>
+    <div class="mb-2 text-red-50/80">
+      season={season} currentSeason={currentSeason} mode={mode} perMode={perMode} playerRows={playerRows.length} teamRows={teamRows.length}
+    </div>
+    {#if error}
+      <div class="mb-2 break-words text-red-300">error={error}</div>
+    {/if}
+    {#if debugLines.length === 0}
+      <div class="text-red-50/60">No diagnostic events yet.</div>
+    {:else}
+      <div class="space-y-1 whitespace-pre-wrap break-words">
+        {#each debugLines as line}
+          <div>{line}</div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <SeasonStatsModal />
