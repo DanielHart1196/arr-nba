@@ -1,16 +1,13 @@
 <script lang="ts">
+  import { getTeamLogoAbbr } from '$lib/utils/team.utils';
   import type { Team } from '../../types/nba';
 
   export let linescores: { home: { team: Team; periods: number[]; total: number }; away: { team: Team; periods: number[]; total: number } };
 
-  function abbr(team: Team) {
-    return team?.abbreviation || team?.shortDisplayName || (team?.displayName ? team.displayName.split(' ').map((w: string) => w[0]).join('').toUpperCase() : '');
-  }
-
   $: maxPeriods = Math.max(4, linescores?.home?.periods?.length ?? 0, linescores?.away?.periods?.length ?? 0);
   $: extraPeriods = Math.max(0, maxPeriods - 4);
-  $: awayAb = abbr(linescores?.away?.team) || '';
-  $: homeAb = abbr(linescores?.home?.team) || '';
+  $: awayAb = getTeamLogoAbbr(linescores?.away?.team) || '';
+  $: homeAb = getTeamLogoAbbr(linescores?.home?.team) || '';
   $: abLen = Math.max(awayAb.length, homeAb.length);
   $: lineNameColWidth = `${Math.min(Math.max(abLen, 3), 6)}ch`;
   $: gridCols = `${lineNameColWidth} 1fr repeat(4, 2.2rem)${extraPeriods>0?` repeat(${extraPeriods}, 2.2rem)`:''} 2.2rem`;
@@ -27,7 +24,7 @@
       <div class="px-2 py-1 text-right font-semibold">OT{i+1}</div>
     {/each}
     <div class="px-2 py-1 text-right font-semibold">TOT</div>
-    <div class="sticky-col px-2 py-1 text-left">{abbr(linescores?.away?.team)}</div>
+    <div class="sticky-col px-2 py-1 text-left">{awayAb}</div>
     <div></div>
     {#each [0,1,2,3] as i}
       <div class="px-2 py-1 text-right">{(linescores?.away?.periods?.[i] ?? '')}</div>
@@ -36,7 +33,7 @@
       <div class="px-2 py-1 text-right">{(linescores?.away?.periods?.[i+4] ?? '')}</div>
     {/each}
     <div class="px-2 py-1 text-right font-semibold">{linescores?.away?.total}</div>
-    <div class="sticky-col px-2 py-1 text-left">{abbr(linescores?.home?.team)}</div>
+    <div class="sticky-col px-2 py-1 text-left">{homeAb}</div>
     <div></div>
     {#each [0,1,2,3] as i}
       <div class="px-2 py-1 text-right">{(linescores?.home?.periods?.[i] ?? '')}</div>

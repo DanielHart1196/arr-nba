@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createTouchGestures } from '../composables/touch-gestures';
+  import { getTeamLogoAbbr } from '$lib/utils/team.utils';
   import StatsTable from './stats/StatsTable.svelte';
   import LinescoreTable from './stats/LinescoreTable.svelte';
   import type { Player, Team } from '../types/nba';
@@ -118,13 +119,9 @@
     };
   });
 
-  function abbr(team: Team) {
-    return team?.abbreviation || team?.shortDisplayName || (team?.displayName ? team.displayName.split(' ').map((w: string) => w[0]).join('').toUpperCase() : '');
-  }
-
   $: roster = (players?.[side] ?? []);
-  $: awayAb = (linescores?.away?.team ? abbr(linescores.away.team) : '');
-  $: homeAb = (linescores?.home?.team ? abbr(linescores.home.team) : '');
+  $: awayAb = (linescores?.away?.team ? getTeamLogoAbbr(linescores.away.team) : '');
+  $: homeAb = (linescores?.home?.team ? getTeamLogoAbbr(linescores.home.team) : '');
   $: onViewStateChange({ mode, side });
 </script>
 
