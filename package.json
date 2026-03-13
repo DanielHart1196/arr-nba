@@ -7,7 +7,7 @@
     "build": "node scripts/run-build.cjs",
     "build:capacitor": "node scripts/run-build.cjs --capacitor",
     "build:local": "node scripts/run-build.cjs --local",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "preview": "vite preview",
     "dev:host": "vite dev --host",
     "season-history:shard": "node scripts/shard-season-history.cjs",
