@@ -42,6 +42,8 @@
   let lastUpdatedTick = Date.now();
   let lastGameId: string | null = null;
   let lastUpdatedSeconds: number | null = null;
+  let refreshPromise: Promise<void> | null = null;
+  let refreshPromiseGameId: string | null = null;
   const SEASON_CACHE_KEY = 'arrnba:season-leaders-cache';
   const SEASON_CACHE_TTL_MS = 10 * 60 * 1000;
   
@@ -157,10 +159,15 @@
     }
   }
   
-  async function refresh() {
+  async function refresh(forceRefresh = true) {
+    if (refreshPromise && refreshPromiseGameId === data.id) {
+      return refreshPromise;
+    }
+    refreshPromiseGameId = data.id;
+    refreshPromise = (async () => {
     if (isFinalGame() && hasLinescoreData() && payload?.eventDate) return;
     try {
-      const response = await nbaService.getBoxscore(data.id, true);
+      const response = await nbaService.getBoxscore(data.id, forceRefresh);
       const keepOldLines = hasLinescoreData();
       const nextLines = response?.linescores;
       const nextAwayPeriods = nextLines?.away?.periods ?? [];
@@ -177,7 +184,14 @@
       lastUpdatedAt = Date.now();
     } catch (error) {
       console.error('Failed to refresh boxscore:', error);
+    } finally {
+      if (refreshPromiseGameId === data.id) {
+        refreshPromise = null;
+        refreshPromiseGameId = null;
+      }
     }
+    })();
+    return refreshPromise;
   }
 
   function applyScoreboardEvent(event: NBAEvent): void {
@@ -496,12 +510,14 @@
     }
     // If payload is missing, missing linescores, or missing eventDate, refresh immediately on client
     if (!payload || !hasLinescoreData() || !payload?.eventDate) {
-      refresh();
+      void refresh(false);
     }
-    syncLiveFromScoreboard();
+    if (payload?.eventDate) {
+      void syncLiveFromScoreboard();
+    }
     if (!isFinalGame() || !hasLinescoreData()) {
-      interval = setInterval(refresh, 10000);
-      scoreboardInterval = setInterval(syncLiveFromScoreboard, 10000);
+      interval = setInterval(() => void refresh(true), 10000);
+      scoreboardInterval = setInterval(() => void syncLiveFromScoreboard(), 10000);
     }
     const tickInterval = setInterval(() => {
       lastUpdatedTick = Date.now();
@@ -605,17 +621,18 @@
   $: if (data?.id && data.id !== lastGameId) {
     lastGameId = data.id;
     stableLinescores = null;
+    refreshPromise = null;
+    refreshPromiseGameId = null;
     const cached = nbaService.getCachedBoxscore(data.id);
     if (cached && hasLinescoreData(cached)) {
       payload = cached;
     } else {
       payload = null;
+      void refresh(false);
     }
-    if (!payload || !hasLinescoreData() || !payload?.eventDate) {
-      refresh();
+    if (payload?.eventDate) {
+      void syncLiveFromScoreboard();
     }
-    refresh();
-    syncLiveFromScoreboard();
   }
 
   $: if (isFinalGame() && hasLinescoreData()) {

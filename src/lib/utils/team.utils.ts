@@ -6,8 +6,8 @@ export interface Team {
   homeAway?: 'home' | 'away';
 }
 
-export function getTeamLogoAbbr(team: Team): string {
-  const raw = (team?.abbreviation || '').toUpperCase();
+export function normalizeTeamAbbr(value: string): string {
+  const raw = (value || '').toUpperCase();
   const map: Record<string, string> = {
     SA: 'SAS',
     NO: 'NOP',
@@ -21,6 +21,11 @@ export function getTeamLogoAbbr(team: Team): string {
     MIA: 'MIA',
     SAS: 'SAS'
   };
+  return map[raw] || raw;
+}
+
+export function getTeamLogoAbbr(team: Team): string {
+  const raw = normalizeTeamAbbr(team?.abbreviation || '');
   
   const name = (team?.shortDisplayName || team?.displayName || '').toUpperCase();
   const nameMap: Record<string, string> = {
@@ -37,7 +42,7 @@ export function getTeamLogoAbbr(team: Team): string {
     'WASHINGTON': 'WAS'
   };
   
-  const ab = map[raw] || raw;
+  const ab = raw;
   if (!nameMap[name] && name.includes('UTAH')) return 'UTA';
   return nameMap[name] || ab || '';
 }
@@ -47,7 +52,7 @@ export function getTeamLogoPath(team: Team): string {
 }
 
 export function getTeamLogoPathByAbbr(abbr: string): string {
-  const normalized = (abbr || '').toUpperCase();
+  const normalized = normalizeTeamAbbr(abbr || '');
   if (!normalized) return '';
   const pngByAbbr: Record<string, string> = {
     SAS: '/logos/SAS.png',

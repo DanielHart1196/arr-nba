@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Team } from '$lib/utils/team.utils';
-  import { getTeamLogoAbbr, getTeamLogoPathByAbbr, getTeamLogoScaleStyleByAbbr } from '$lib/utils/team.utils';
+  import { getTeamLogoAbbr, getTeamLogoPathByAbbr, getTeamLogoScaleStyleByAbbr, normalizeTeamAbbr } from '$lib/utils/team.utils';
 
   export let abbr: string = '';
   export let team: Team | null = null;
@@ -10,7 +10,7 @@
   export let loading: 'lazy' | 'eager' = 'lazy';
   export let decoding: 'async' | 'sync' | 'auto' = 'async';
 
-  $: resolvedAbbr = abbr || (team ? getTeamLogoAbbr(team) : '');
+  $: resolvedAbbr = abbr ? normalizeTeamAbbr(abbr) : (team ? getTeamLogoAbbr(team) : '');
   $: src = resolvedAbbr ? getTeamLogoPathByAbbr(resolvedAbbr) : '';
   $: label = alt || '';
 </script>

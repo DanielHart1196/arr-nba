@@ -99,6 +99,21 @@ export async function findSharkStreamByTeams(
       };
     }
 
+    if (playerUrl) {
+      try {
+        const resolvedHls = await resolveHlsFromPlayerUrl(playerUrl);
+        if (resolvedHls) {
+          return {
+            label: 'Watch Live (HLS)',
+            url: toPlayableHlsUrl(resolvedHls),
+            mode: 'video'
+          };
+        }
+      } catch {
+        // Fall through to embedded player URL.
+      }
+    }
+
     return {
       label: 'Watch Live (SharkStreams)',
       url: playerUrl,
