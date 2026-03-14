@@ -205,6 +205,10 @@
       const awayScore = Number(away.score);
       payload.linescores.away = {
         ...payload.linescores.away,
+        team: {
+          ...(payload.linescores.away.team ?? {}),
+          ...(away.team ?? {})
+        },
         total: Number.isFinite(awayScore) && awayScore > 0 ? awayScore : (payload.linescores.away.total ?? 0),
         periods: awayPeriods.length > 0 ? awayPeriods : payload.linescores.away.periods
       };
@@ -217,6 +221,10 @@
       const homeScore = Number(home.score);
       payload.linescores.home = {
         ...payload.linescores.home,
+        team: {
+          ...(payload.linescores.home.team ?? {}),
+          ...(home.team ?? {})
+        },
         total: Number.isFinite(homeScore) && homeScore > 0 ? homeScore : (payload.linescores.home.total ?? 0),
         periods: homePeriods.length > 0 ? homePeriods : payload.linescores.home.periods
       };
@@ -555,7 +563,7 @@
     if (!teamId || teams.length === 0) return '';
 
     const match = teams.find((entry: any) => String(entry?.team?.id ?? '') === teamId);
-    return extractRecordSummary(match?.team);
+    return extractRecordSummary(match) || extractRecordSummary(match?.team);
   }
 
   async function prewarmSeasonLeaders(): Promise<void> {
@@ -677,38 +685,33 @@
   </div>
   <div class="mt-2 mb-2 min-h-[60px] swipe-area">
     {#if payload?.linescores}
-      <div class="flex items-center justify-between text-lg font-semibold">
-        <div class="flex items-center gap-2">
-          <TeamLogo team={payload?.linescores?.away?.team ?? null} className="h-7 w-7 object-contain" alt="away" loading="eager" />
-          <div class="flex flex-col leading-tight">
-            <span>{getTeamLogoAbbr(payload?.linescores?.away?.team)}</span>
-            {#if getTeamRecord('away')}
-              <span class="text-xs font-medium text-white/60">{getTeamRecord('away')}</span>
-            {/if}
-          </div>
+      <div class="grid grid-cols-[96px_auto_96px] grid-rows-[auto_auto] items-center gap-y-0 text-lg font-semibold">
+        <div class="col-start-1 row-start-1 grid w-[92px] grid-cols-[1.75rem_3.5rem] items-center justify-self-center gap-x-2">
+          <TeamLogo team={payload?.linescores?.away?.team ?? null} className="h-7 w-7 object-contain shrink-0" alt="away" loading="eager" />
+          <div class="text-center leading-none">{getTeamLogoAbbr(payload?.linescores?.away?.team)}</div>
         </div>
-        <span>{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
-        <div class="flex items-center gap-2">
-          <div class="flex flex-col items-end leading-tight">
-            <span>{getTeamLogoAbbr(payload?.linescores?.home?.team)}</span>
-            {#if getTeamRecord('home')}
-              <span class="text-xs font-medium text-white/60">{getTeamRecord('home')}</span>
-            {/if}
-          </div>
-          <TeamLogo team={payload?.linescores?.home?.team ?? null} className="h-7 w-7 object-contain" alt="home" loading="eager" />
+        <span class="col-start-2 row-start-1 justify-self-center leading-none">{payload?.linescores?.away?.total} - {payload?.linescores?.home?.total}</span>
+        <div class="col-start-3 row-start-1 grid w-[92px] grid-cols-[3.5rem_1.75rem] items-center justify-self-center gap-x-2">
+          <div class="text-center leading-none">{getTeamLogoAbbr(payload?.linescores?.home?.team)}</div>
+          <TeamLogo team={payload?.linescores?.home?.team ?? null} className="h-7 w-7 object-contain shrink-0" alt="home" loading="eager" />
         </div>
-      </div>
-      <div class="relative text-white/70 text-sm mt-1 text-center">
-        {#if isFinalGame()}
-          FINAL
-        {:else if payload?.status?.short}
-          {formatStatus(payload?.status?.short)}
-        {:else}
-          {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
-        {/if}
-        {#if lastUpdatedSeconds !== null}
-          <span class="absolute right-0 top-0 text-white/40 text-xs">{lastUpdatedSeconds}s ago</span>
-        {/if}
+        <div class="col-start-1 row-start-2 -mt-0.5 grid w-[92px] grid-cols-[1.75rem_3.5rem] items-center justify-self-center gap-x-2">
+          <div></div>
+          <div class="text-center text-xs font-medium leading-none text-white/60">{getTeamRecord('away') || ''}</div>
+        </div>
+        <div class="col-start-2 row-start-2 text-center text-sm text-white/70">
+          {#if isFinalGame()}
+            FINAL
+          {:else if payload?.status?.short}
+            {formatStatus(payload?.status?.short)}
+          {:else}
+            {formatStatus(payload?.status?.clock && payload?.status?.period ? `Q${payload?.status?.period} ${payload?.status?.clock}` : '')}
+          {/if}
+        </div>
+        <div class="col-start-3 row-start-2 -mt-0.5 grid w-[92px] grid-cols-[3.5rem_1.75rem] items-center justify-self-center gap-x-2">
+          <div class="text-center text-xs font-medium leading-none text-white/60">{getTeamRecord('home') || ''}</div>
+          <div></div>
+        </div>
       </div>
     {/if}
   </div>

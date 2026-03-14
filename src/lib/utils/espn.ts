@@ -139,6 +139,12 @@ export function normalizePlayers(summary: any, scoreboardEvent?: any) {
 export function parseLinescores(summary: any, scoreboardFallback?: any) {
   const comp = summary?.boxscore?.teams ?? [];
   const lines: Record<'home' | 'away', { team: any; periods: number[]; total: number }> = { home: { team: {}, periods: [], total: 0 }, away: { team: {}, periods: [], total: 0 } };
+  const mergeTeamRecordData = (entry: any): any => ({
+    ...(entry?.team ?? {}),
+    ...(typeof entry?.recordSummary === 'string' && entry.recordSummary.trim() ? { recordSummary: entry.recordSummary.trim() } : {}),
+    ...(typeof entry?.record === 'string' && entry.record.trim() ? { record: entry.record.trim() } : {}),
+    ...(Array.isArray(entry?.records) ? { records: entry.records } : {})
+  });
   const toNum = (v: any): number => {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
@@ -158,7 +164,7 @@ export function parseLinescores(summary: any, scoreboardFallback?: any) {
 
     const periods: number[] = toPeriods(t?.linescores ?? []);
     const total = toNum(t?.score ?? t?.points ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0);
-    lines[side] = { team: t?.team, periods, total };
+    lines[side] = { team: mergeTeamRecordData(t), periods, total };
   }
   if (!lines.home.periods?.length || !lines.away.periods?.length) {
     const compFb = scoreboardFallback?.competitions?.[0] ?? summary?.header?.competitions?.[0];
@@ -166,11 +172,11 @@ export function parseLinescores(summary: any, scoreboardFallback?: any) {
     const homeTeam = compFb?.competitors?.find((c: any) => c.homeAway === 'home');
     if (awayTeam) {
       const periods = toPeriods(awayTeam?.linescores ?? []);
-      lines.away = { team: awayTeam.team, periods, total: toNum(awayTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
+      lines.away = { team: mergeTeamRecordData(awayTeam), periods, total: toNum(awayTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
     }
     if (homeTeam) {
       const periods = toPeriods(homeTeam?.linescores ?? []);
-      lines.home = { team: homeTeam.team, periods, total: toNum(homeTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
+      lines.home = { team: mergeTeamRecordData(homeTeam), periods, total: toNum(homeTeam.score ?? 0) || periods.reduce((sum, v) => sum + toNum(v), 0) };
     }
   }
   return lines;
